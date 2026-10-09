@@ -148,6 +148,29 @@ git clone <REPO_URL> <PLUGIN_DIR>
 
 ### 3.2 安装
 
+> **前置：`github:` 源要求 `git` 在 PATH 里。** pnpm 解析 `github:` 规格时
+> 会 shell 调用 `git ls-remote` 去问远端的分支与 tag。目标机没装 git 时，
+> 安装会在这一步失败，报错形如：
+>
+> ```text
+> [ERROR] Command failed with exit code 1: git ls-remote "https://github.com/<owner>/<repo>.git"
+> 'git' 不是内部或外部命令，也不是可运行的程序或批处理文件。
+> ```
+>
+> 两条路：
+>
+> 1. **装上 git 再重试**：Windows 用 `winget install Git.Git` 或到 git-scm.com 下载；
+>    装完**重开终端**让 PATH 生效，再执行上面的 `add` 命令。
+> 2. **绕开 git**：把本工程目录（或解压后的 zip）直接拷到目标机，用本地路径安装。
+>    本包**零运行时依赖**（`package.json` 没有 `dependencies`），`link:` 安装
+>    不需要联网下载任何东西：
+>
+>    ```bash
+>    dsh plugin --profile <PROFILE> add "link:<解压后的目录>"
+>    ```
+>
+>    界面里的「添加插件」对话框同样接受**本地目录路径**，效果一致。
+
 > 下面的命令**只应在测试机上执行**。执行前先确认 `echo $DSH_HOME` 指向测试机的 dsh home。
 
 **推荐：`link:` 协议**（软链到源码目录，改代码后重启即生效，适合联调）
