@@ -11,10 +11,14 @@ gov-workbench.json
 *.local
 *.log
 logs/
-shots/
 dist/
 *.zip
 *.tar.gz
+
+# 截图目录进版本控制（README 的示例图），但浏览器临时 profile 不进
+shots/.browser-profile/
+shots/.edge-profile/
+shots/*.tmp.png
 
 # 编辑器 / 系统
 .vscode/

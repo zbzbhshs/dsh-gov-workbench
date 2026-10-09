@@ -1,12 +1,12 @@
-# 宿主端点目录（dsh 0.2.0-rc.2 实测）
+# 宿主端点目录（dsh 0.2.0-rc.2）
 
 本文档由 `app.asar` 内 26 个宿主包的 `lib/typert.host.js` 里的 `invocations[]`
 逐条抽取生成，共 140 个端点。它是 `lib/host.js` 的
-`TYPERT_NAMESPACE_ALIASES` 与 `public/js/api.js` 的唯一依据 —— 凡是本文档里
+`TYPERT_NAMESPACE_ALIASES` 与 `public/js/api.js` 的唯一依据。凡是本文档里
 没有的端点，一律视为不存在，插件不会去调用。
 
 参数列的写法：`wire(来源[,undef])`。`undef` 表示描述符声明了
-`acceptsUndefined: true`，即该 wire **可以整个缺席**（`buildArgs` 必须省略它，
+`acceptsUndefined: true`，即该 wire 可以整个缺席（`buildArgs` 必须省略它，
 不能塞占位对象）。`scope` 列是 `invocation.scope.wire`，即 context 型调用的身份字段。
 
 | 端点 | scope wire | 参数（wire(source[,undef])） |

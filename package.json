@@ -2,7 +2,7 @@
   "name": "dsh-gov-workbench",
   "version": "1.0.0",
   "type": "module",
-  "description": "综合政务智能工作台 —— 一个可独立安装运行的 dsh Cordis 插件：在独立端口（默认 3091）拉起政务门户风格 WebUI，并把浏览器请求 1:1 桥接到宿主进程内的 API 网关。",
+  "description": "政务门户风格的 dsh Cordis 插件：在独立端口提供一个办事大厅界面，直接对接宿主的会话、模型与权限。",
   "keywords": [
     "dsh",
     "deepseek-harness",
