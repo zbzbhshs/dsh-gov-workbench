@@ -1,38 +1,66 @@
 # dsh-gov-workbench bundle patch
 #
 # 这个文件是 `package.json` 里 `dsh.bundle.patch` 指向的层。安装时走官方
-# CLI：
+# CLI（注意 desktop profile 由 Electron 独占，CLI 会拒绝，请用别的 profile）：
 #
-#   dsh plugin --profile desktop add link:<本目录>
+#   dsh plugin --profile <PROFILE> add link:<本目录>
 #
 # 该命令会在 profile 目录执行 pnpm install，然后 reconcile
 # `dsh.profile.bundles`：看到本包声明了 `dsh.bundle.patch`，就把
 # `dsh-gov-workbench` 追加进 bundle 栈。profile boot 再把下面这个
 # `- insert:` 合并进 cordis 树，等价于手写一行挂载。
 #
-# 关于 inject：
-#   参考文档（面向 dsh 0.1.x）写的 `inject: [apiProxy]` 在本机
-#   dsh 0.2.0-rc.2 上会让插件**永不激活** —— 那个版本里
-#   `@deepseek-ai/dsh-host-apiproxy` 已被移除，`apiProxy` service 不存在，
-#   Cordis 会一直把它挂在「Plugins waiting for services」里。0.2.0 起的
-#   API 网关是 `typertGateway` + 各域 controller（sessionController /
-#   settingsController / workspaceController / agentPresets / llm 等）。
+# ─────────────────────────────────────────────────────────────────────
+# 关于 inject：这里**故意不写 inject 字段**
+# ─────────────────────────────────────────────────────────────────────
 #
-#   所以这里**不硬编码 inject**，而是用一个 `!!js` 表达式：只有当
-#   `apiProxy` 这个 service 真的存在时（0.1.x 老形态）才声明等待它；
-#   0.2.0+ 上表达式求值为 `[]`，插件立即激活，由 `lib/host.js` 在 apply()
-#   内的能力探测接管。两种宿主形态都能挂上，也不会卡在
-#   「Plugins waiting for services」。
+# 参考文档（面向 dsh 0.1.x）写的是 `inject: [apiProxy]`。那在本机
+# dsh 0.2.0-rc.2 上会让插件**永不激活**：`@deepseek-ai/dsh-host-apiproxy`
+# 已被移除，`apiProxy` 这个 service 不存在，Cordis 会一直把它挂在
+# 「Plugins waiting for services」里。0.2.0 起的 API 网关是
+# `typertGateway` + 各域 controller（sessionController / settingsController /
+# workspaceController / agentPresets / llm 等）。
 #
-#   注：`ctx.get(name, false)` 的第二参数 `false` 表示「不要求已注入」，
-#   缺失时返回 undefined 而不是抛错 —— 这一点在 cordis 上是必须的，
-#   因为直接读 `ctx.apiProxy` 属性会抛 `cannot get property ... without inject`。
+# **也绝不能用 `!!js` 表达式来条件化 inject。** 这一点已用真 cordis 4.x +
+# 真 cordis-plugin-loader + 真 YAML 方言实测确认（`test/patch-inject.mjs`
+# 就是这条的回归测试）：
+#
+#   1. `entryListSchema = yaml.JSON_SCHEMA.extend(JsExpr)` 让整个文档都用
+#      `!!js` 类型解析，所以 `inject: !!js "..."` 会变成一个**对象**
+#      `{ __jsExpr: "..." }`，而不是字符串或数组。
+#   2. loader 的 `interpolate(ctx, value)` **只对 `config` 调用**
+#      （`ctx.on("internal/config", ...) { ... return interpolate(this.ctx, config) }`），
+#      `inject` 不在求值路径上。
+#   3. `disabled` 有专门的 `disabledOf(options) { return isJsExpr(options.disabled) ? Boolean(this.evaluate(options.disabled.__jsExpr)) : Boolean(options.disabled) }`，
+#      **`inject` 没有对应的 `isJsExpr` 分支**。
+#   4. `Inject.resolve(inject)` 的实现是：
+#        resolve(inject, result = Object.create(null)) {
+#          if (!inject) return result
+#          if (Array.isArray(inject)) for (const name of inject) result[name] = null
+#          else if (Reflect.has(inject, symbols.checkProto)) { ... }
+#          else for (const name of Object.keys(inject)) result[name] = inject[name] ?? null
+#          return result
+#        }
+#      `{__jsExpr:"..."}` 既不是数组、也没有 checkProto，于是走最后一条分支 ——
+#      **把 `__jsExpr` 当成一个 service 名注册**，插件永久等待一个永远不存在
+#      的服务。实测输出：`Inject.resolve(...)` → `["__jsExpr"]`。
+#   5. loader 的消费点是
+#      `ctx.on("internal/plugin", (fiber) => { ... Inject.resolve(fiber.entry.options.inject, fiber.inject) })`。
+#      若 `options.inject` 为 `undefined`，`Inject.resolve` 提前 return，
+#      **插件自己导出的 `inject` 生效**。
+#
+# 所以正确做法是**整行删掉 `inject:`**（不是写 `inject: []` —— 空数组同样
+# 会覆盖插件导出的值），让 `lib/index.js` 的 `export const inject = []` 生效，
+# 插件立即激活；网关的就绪时机改由 `lib/host.js` 的**惰性解析 + 等待式事件流**
+# 处理 —— 每次调用都重新 `ctx.get('typertGateway', false)`，网关晚到也能自动接上。
+#
+# 注：`ctx.get(name, false)` 的第二参数 `false` 表示「不要求已注入」，
+# 缺失时返回 `undefined` 而不是抛错 —— 这一点在 cordis 上是必须的，
+# 因为插件作用域下直接读 `ctx.apiProxy` 属性会抛
+# `cannot get property "apiProxy" without inject`（实测确认）。
 - insert:
     - id: gov-workbench
       name: 'dsh-gov-workbench'
-      # 老形态部署上自动等 apiProxy；新形态（0.2.0+）上该表达式为 false，
-      # 插件立即激活，由 host.js 的探测接管。
-      inject: !!js "ctx.get('apiProxy', false) ? ['apiProxy'] : []"
       config:
         # 端口刻意避开 3080（dsh 主 GUI）与 3081（原版 gov-portal）。
         port: 3091

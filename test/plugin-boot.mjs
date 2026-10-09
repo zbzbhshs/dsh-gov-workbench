@@ -268,6 +268,86 @@ await test('未探测到网关时如实告警但仍照常起页面', async () =>
   }
 })
 
+await test('网关晚于插件 provide 时自动接上（惰性解析 + 等待式事件流）', async () => {
+  // 因为 cordis.patch.yml 不能写 inject（!!js 在 inject 上不被求值，会把
+  // __jsExpr 当服务名导致插件永不激活），插件是「立即激活」的，网关很可能
+  // 在 apply() 之后才 provide。本测试确保那种顺序也能工作。
+  const home = await mkdtemp(join(tmpdir(), 'gov-home-'))
+  // 启动时**不给**任何网关
+  const boot = await bootPlugin({ dshHome: home, config: {}, services: {} })
+  try {
+    assert.ok(
+      boot.logs.some((line) => line.includes('未探测到宿主 API 网关')),
+      '启动时应如实告警网关不可用',
+    )
+
+    // 现在把网关挂上去（模拟宿主稍后 provide）
+    const gateway = createFakeGateway()
+    boot.ctx.services.typertGateway = gateway
+    boot.ctx.typertGateway = gateway
+
+    // kind 是 getter，应立刻反映新状态
+    const token = await readToken(boot)
+    const status = await (await fetch(`${boot.origin}/api/workbench.status`, {
+      method: 'POST',
+      headers: headers(boot.origin, { 'x-gov-token': token }),
+      body: JSON.stringify({ type: 'client-request', rpcId: 'late-1', method: 'workbench.status', payload: {} }),
+    })).json()
+    assert.equal(status.result.value.host, 'typertGateway', 'kind getter 应实时反映晚到的网关')
+    assert.equal(status.result.value.hostAvailable, true)
+
+    // 业务调用应真的派发到网关（不需要重启插件）
+    const listed = await (await fetch(`${boot.origin}/api/session.list`, {
+      method: 'POST',
+      headers: headers(boot.origin, { 'x-gov-token': token }),
+      body: JSON.stringify({ type: 'client-request', rpcId: 'late-2', method: 'session.list', payload: {} }),
+    })).json()
+    assert.equal(listed.result.ok, true, `晚到的网关应能处理业务调用：${JSON.stringify(listed.result)}`)
+    assert.ok(
+      gateway.dispatched.some((entry) => entry.endpoint === 'session/list'),
+      '网关应收到 session/list 派发',
+    )
+  } finally {
+    await boot.close()
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+await test('网关缺席时 hostEvents 等待而不是立即结束（等待式生成器）', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gov-home-'))
+  const boot = await bootPlugin({ dshHome: home, config: {}, services: {} })
+  try {
+    const { createHostBridge } = await import('../lib/host.js')
+    const bridge = createHostBridge(boot.ctx, { info() {}, warn() {} })
+    const controller = new AbortController()
+
+    // 起一个消费者，然后延迟提供网关：事件流应当自动接上。
+    const frames = []
+    const consume = (async () => {
+      for await (const frame of bridge.hostEvents(controller.signal)) {
+        frames.push(frame)
+        if (frames.length >= 1) break
+      }
+    })()
+
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    assert.equal(frames.length, 0, '网关未就绪时不应有帧')
+
+    const gateway = createFakeGateway()
+    boot.ctx.services.typertGateway = gateway
+    boot.ctx.typertGateway = gateway
+
+    const got = await waitFor(() => frames.length >= 1, 4000)
+    controller.abort()
+    await consume.catch(() => undefined)
+    assert.ok(got, '网关提供后事件流应自动接上并收到 ready 帧')
+    assert.equal(frames[0].type, 'ready', `首帧应是 ready，实际：${JSON.stringify(frames[0])}`)
+  } finally {
+    await boot.close()
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
 await test('探测到 typertGateway 时接入（本机 0.2.0-rc.2 的真实形态）', async () => {
   const home = await mkdtemp(join(tmpdir(), 'gov-home-'))
   const gateway = createFakeGateway()

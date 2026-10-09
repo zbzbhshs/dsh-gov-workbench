@@ -1266,7 +1266,138 @@ fiber.dispose() 后 3092 可重新监听 = true
 
 ---
 
-## 14. 已知偏差与未验证项（如实登记）
+## 14. `inject` 不能用 `!!js`：`Inject.resolve` 会把表达式节点当成服务名
+
+这是本项目踩过的**最致命**的一个坑：patch 里写
+`inject: !!js "ctx.get('apiProxy', false) ? ['apiProxy'] : []"`，
+结果插件**永不激活** —— 启动日志停在「Plugins waiting for services」，3091 根本不监听。
+
+### 14.1 事实（真 cordis 4.x + 真 loader + 真 YAML 方言实测）
+
+```
+=== parsed patch row ===
+  id   : gov-workbench
+  name : dsh-gov-workbench
+  inject raw: {"__jsExpr":"ctx.get('apiProxy', false) ? ['apiProxy'] : []"}
+  isJsExpr(inject)? true
+
+=== after interpolate(ctx, config) (loader only calls it on config) ===
+  inject touched?: {"__jsExpr":"ctx.get('apiProxy', false) ? ['apiProxy'] : []"}
+
+=== Inject.resolve(inject) -> services the plugin waits for ===
+  ["__jsExpr"]
+```
+
+### 14.2 机制（五步，逐条可复核）
+
+1. **YAML 方言**：`cordis-plugin-include` 里
+
+   ```js
+   const JsExpr = new yaml.Type('tag:yaml.org,2002:js', {
+     kind: 'scalar',
+     resolve: (data) => typeof data === 'string',
+     construct: (data) => ({ __jsExpr: data }),
+     predicate: isJsExpr,
+     represent: (data) => data.__jsExpr,
+   })
+   const entryListSchema = yaml.JSON_SCHEMA.extend(JsExpr)
+   ```
+
+   （注意它用的是 **`js-yaml`** 的 `yaml.Type` / `JSON_SCHEMA.extend`，不是 `yaml` 包的 API —— 复核时别拿错包。）
+   整个文档都按 `!!js` 解析，所以 `inject: !!js "..."` 得到的是**对象** `{__jsExpr:"..."}`。
+
+2. **求值范围**：loader 只在 `config` 上调用 `interpolate`：
+
+   ```js
+   ctx.on("internal/config", function (_config, next) {
+     const config = next()
+     if (!this.entry || this.parent.fiber?.entry === this.entry) return config
+     if (this.runtime?.callback?.[EntryGroup.key]) return config
+     return interpolate(this.ctx, config)
+   }, { global: true })
+   ```
+
+   `inject` 不在求值路径上 —— 那个表达式**永远不会被求值**。
+
+3. **`disabled` 有专门分支，`inject` 没有**：
+
+   ```js
+   disabledOf(options) {
+     return isJsExpr(options.disabled)
+       ? Boolean(this.evaluate(options.disabled.__jsExpr))
+       : Boolean(options.disabled)
+   }
+   ```
+
+   全文搜索 `isJsExpr` 只有 `interpolate`、`disabledOf`、类型判定三处用途，**没有** `injectOf` 之类的东西。
+
+4. **`Inject.resolve` 把 `__jsExpr` 当服务名**：
+
+   ```js
+   function resolve(inject, result = Object.create(null)) {
+     if (!inject) return result
+     if (Array.isArray(inject)) for (const name of inject) result[name] = null
+     else if (Reflect.has(inject, symbols.checkProto)) {
+       Object.assign(result, resolve(Object.getPrototypeOf(inject)))
+       for (const name of Object.keys(inject)) result[name] = inject[name] ?? null
+     } else for (const name of Object.keys(inject)) result[name] = inject[name] ?? null
+     return result
+   }
+   ```
+
+   `{__jsExpr:"..."}` 既不是数组、也没有 `checkProto` → 走最后一条 → `result["__jsExpr"] = "..."`。
+
+5. **消费点与「插件导出的 inject 何时生效」**：
+
+   ```js
+   ctx.on("internal/plugin", (fiber) => {
+     if (fiber.parent[Entry.key] && !fiber.entry) {
+       fiber.entry = fiber.parent[Entry.key]
+       Inject.resolve(fiber.entry.options.inject, fiber.inject)
+     }
+     ...
+   })
+   ```
+
+   **只有当 `entry.options.inject` 为 `undefined` 时，`Inject.resolve` 提前 return，插件自己导出的 `inject` 才生效。**
+
+### 14.3 正确做法
+
+**整行删掉 `inject:`** —— 不是写 `inject: []`。空数组会让 `Inject.resolve` 走第一条分支（`Array.isArray` 为真）但什么都不注册，**同样覆盖**掉插件导出的 `inject`。
+
+删掉后 `lib/index.js` 的 `export const inject = []` 生效，插件立即激活。
+
+另外 `inject: [apiProxy]`（普通数组）在 0.2.0-rc.2 上同样会让插件永不激活 —— 因为该版本已无 `apiProxy` service。**两种写法都不能用，原因不同**。
+
+### 14.4 `ctx.inject([name], cb)` 是响应式的（等待网关就绪的正确手段）
+
+删掉 `inject` 后插件立即激活，网关可能在 `apply()` 之后才 provide。实测 `ctx.inject` 正好能解决这个时机问题：
+
+```
+--- 注册 ctx.inject(["typertGateway"], cb) ---
+inject() 返回值类型: object
+回调立即触发了吗: false
+等待 50ms 后，回调触发次数: 0
+
+--- 现在 provide typertGateway ---
+[inject 回调被触发] 拿到 typertGateway: object
+provide 之后，回调触发次数: 1
+结论: 响应式确认 ✓
+```
+
+语义：**service 缺失时不触发，provide 后自动回调**；返回一个 disposer。
+
+工程内落点（`lib/host.js`）：
+
+- `readService(ctx, key)` —— 一律 `ctx.get(key, false)` + try/catch（见第 12 节）；
+- `createServiceWaiter(ctx, name)` —— 用 `ctx.inject([name], cb)` 做响应式唤醒，**叠加轮询兜底**（`ctx.inject` 不可用时也能等到，且能覆盖「服务被撤下又重新提供」）；
+- `kind` 是 **getter**，`invoke` / `stream` / `resolveEventResult` / `describeEndpoint` 每次调用重新解析网关；
+- `hostEvents(signal)` 是**等待式生成器**：先 `await waiter.wait(signal)`，网关出现后再转发；流自然结束后若网关仍在且未 abort 会重新接续 —— 所以 `MuxController` 不需要任何重启逻辑。
+
+回归测试：`test/plugin-boot.mjs` 的「网关晚于插件 provide 时自动接上」与「网关缺席时 hostEvents 等待而不是立即结束」；
+装配守卫：`test/patch-inject.mjs`（含一个故意构造坏 patch 的**对照组**，证明检测不是空转）。
+
+## 15. 已知偏差与未验证项（如实登记）
 
 | 项 | 状态 | 说明 |
 | --- | --- | --- |
@@ -1279,6 +1410,8 @@ fiber.dispose() 后 3092 可重新监听 = true
 | `session/follow` 的 `assistant-stream` 子帧全量字段 | 部分确认 | 已确认 `type` 取值集合含 `start` / `chunk` / `end` 及 `committed` / `abandoned`；`chunk` 帧带 `{attemptId, revision, index, time, chunk}`。未逐一穷举 `end` 帧全部字段 |
 | 未在**真实 dsh 进程**里挂载 3091 | **未验证** | 第 13.6 节是**真 cordis + 假 typertGateway**；在真 dsh 进程里挂载需要重启 dsh，本轮未做 |
 | `sessionProjections` 在真 cordis 探针里缺失 | 环境限制 | 第 13.6 节探针只 provide 了 `typertGateway`，未 provide `sessionProjections`，插件如实告警「未找到 sessionProjections」而非崩溃——这本身是降级路径的正面证据 |
+| 曾用 `inject: !!js "..."` 导致插件永不激活 | **已修，已加回归守卫** | 致命 bug。`Inject.resolve` 把 `{__jsExpr}` 当服务名，插件永久等待。修法：整行删掉 `inject:`。详见第 14 节；`test/patch-inject.mjs` 8 项守着（含对照组） |
+| `lib/sse.js` 的 `readService` 改为从 `lib/host.js` 导入 | 去重 | 原先两处各有一份实现，行为相同；现在单一来源，避免漂移 |
 
 ---
 
@@ -1286,14 +1419,16 @@ fiber.dispose() 后 3092 可重新监听 = true
 
 | 文件 | 负责 | 对应节 |
 | --- | --- | --- |
-| `lib/index.js` | Cordis 插件入口：`apply()` → 探测 → 起 3091 → 准入；关停走 `ctx.effect` | 9, 13 |
-| `lib/host.js` | 双形态适配（`apiProxy` / `typertGateway`）+ Proxy 安全的 service 探测 + 描述符驱动的 `buildArgs` | 1, 2, 12 |
+| `lib/index.js` | Cordis 插件入口：`apply()` → 探测 → 起 3091 → 准入；关停走 `ctx.effect`；`inject` 留空（第 14 节） | 9, 13, 14 |
+| `lib/host.js` | 双形态适配（`apiProxy` / `typertGateway`）+ Proxy 安全的 service 探测 + **惰性解析 / `kind` getter / 等待式 `hostEvents`** + 描述符驱动的 `buildArgs` | 1, 2, 12, 14.4 |
 | `lib/bridge.js` | `/api/<domain>.<method>` 四象限信封 → 网关；`/api/events.mux`、`/api/events.host`、`/api/respond`、`/api/session.export` | 3, 8 |
 | `lib/transport.js` | `trackAbort`（缺陷 A 修复）、SSE 编码与心跳、应答登记表 | 7 |
 | `lib/sse.js` | `MuxController`：进程内订阅会话事件 + 投影 + `$events` waterfall 翻译 | 6, 12 |
 | `lib/security.js` | 来源 / 令牌 / Content-Type 准入 | 5 |
 | `lib/config.js` | 配置读写与归一化（端口 / host / 令牌 / 跑马灯） | 9 |
+| `cordis.patch.yml` | 装配层：`- insert:` 插件行，**故意不写 `inject:`** | 14 |
 | `public/js/api.js` | 浏览器侧四象限客户端（wire 一律「单数域名.方法」写法；`settings.*` 按位置参数组装 payload） | 2, 3 |
 | `test/cordis-proxy.mjs` | 真 cordis Proxy 语义 + 「源码里不得裸访问 `ctx.<service>`」守卫 | 12 |
-| `test/plugin-boot.mjs` | 真装配：`apply()` → 起真服务 → 真请求 → dispose 释放端口；含 `ctx.effect` 行为与源码断言 | 13 |
+| `test/patch-inject.mjs` | **`inject` 不得用 `!!js`**：静态检查 + 真 cordis/loader 端到端 + 对照组 | 14 |
+| `test/plugin-boot.mjs` | 真装配：`apply()` → 起真服务 → 真请求 → 惰性接网关 → dispose 释放端口；含 `ctx.effect` 行为与源码断言 | 13, 14.4 |
 | `test/frontend-wiring.mjs` | 前端装配；含 `settings.*` 位置参数形状的两条守卫（第 2.5 节） | 2.5 |

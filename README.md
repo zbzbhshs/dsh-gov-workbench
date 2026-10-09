@@ -175,7 +175,7 @@ dsh plugin --profile web add "link:/home/user/plugins/dsh-gov-workbench"
 | `link:` | `dsh plugin --profile web add "link:<PLUGIN_DIR>"` | 联调；软链，改源码立即反映 |
 | `file:` | `dsh plugin --profile web add "file:<PLUGIN_DIR>"` | 拷贝一份到 profile 的 store，与源码解耦 |
 | 相对路径 | `dsh plugin --profile web add "../dsh-gov-workbench"` | 在 profile 目录附近时；会被锚定到**当前工作目录** |
-| npm 包名 | `dsh plugin --profile web add dsh-gov-workbench` | 已发布到 registry 时（本包 `private: true`，需先去 `package.json` 里删掉该字段并发布） |
+| npm 包名 | `dsh plugin --profile web add dsh-gov-workbench` | 已发布到 registry 时。本包 `package.json` 未设 `private`，可直接 `npm publish`；但注意 registry 默认是 npmmirror 镜像，发布要走官方源 |
 
 命令行为（`@deepseek-ai/dsh-plugin-manager` 实测）：
 
@@ -270,14 +270,25 @@ dsh --profile <PROFILE> --dump-config-schema   # 只打印 profile 条目的 JSO
 ```bash
 cd <PLUGIN_DIR>
 
-node test/syntax-check.mjs      # 语法 + UTF-8 无 BOM + 分层约束 + package.json 路径
+node test/syntax-check.mjs      # 语法 + UTF-8 无 BOM + 分层约束 + package.json 路径 + patch inject 守卫
+node test/patch-inject.mjs      # patch 不得用 !!js 写 inject（真 cordis 可用时做端到端验证）
 node test/cordis-proxy.mjs      # cordis ctx Proxy 语义（未 inject 的 service 访问会抛错）
 node test/server-smoke.mjs      # 静态托管 / 四象限信封 / SSE / respond / 导出 / 跨源拒绝
-node test/plugin-boot.mjs       # 真 apply() → 真 http → 真 SSE → 关停
-node test/frontend-wiring.mjs   # DOM id / 类名 / 栏目 / 模块顺序
+node test/plugin-boot.mjs       # 真 apply() → 真 http → 真 SSE → 惰性接网关 → 关停
+node test/frontend-wiring.mjs   # DOM id / 类名 / 栏目 / 模块顺序 / settings 签名
 ```
 
-全部应以 `exit=0` 结束，并打印 `全部通过（N 项）`。合计 125 项。
+全部应以 `exit=0` 结束，并打印 `全部通过（N 项）`。合计 136 项。
+
+> `test/patch-inject.mjs` 的第 2 组需要真 `@deepseek-ai/cordis` / `cordis-plugin-loader` /
+> `cordis-plugin-include` / `js-yaml`。解析不到时该组打印 `SKIP` 并以 **0** 退出（不算失败），
+> 第 1 组的静态检查永远执行 —— 所以测试机上没装这些依赖也不会误报。
+
+**关于 `test/` 是否随包分发**：`package.json` 的 `files` 字段**包含** `test`。
+这样无论用 `link:`（软链到源码目录）还是 `file:`（拷贝到 profile store）安装，
+都能直接在安装目录里跑上面这些命令。测试本身零依赖、不占用 3091、不碰真实配置，
+带上没有副作用。若你只想发最小包，把 `files` 里的 `"test"` 删掉即可 ——
+那时测试需要从仓库源码跑。
 
 > `plugin-boot.mjs` 会**真的起一个 http 服务**，但它先让内核分配空闲端口再写进配置，
 > 用临时 `DSH_HOME`，**不会占用 3091**，也不碰测试机的真实配置。
@@ -423,7 +434,7 @@ node test/syntax-check.mjs
 node test/server-smoke.mjs
 ```
 
-**端到端装配测试** —— 真的调用插件的 `apply(ctx, config)` → 读配置 → 探测宿主 → 起真 http 服务 → 静态托管 → `/api/*` 桥 → `/plugin/*` 端点 → 关停。断言插件形状与 `Config` 容错、上线日志、未探测到网关时如实告警但仍可开页面、`typertGateway` 与老形态 `apiProxy` 的优先级、首次访问种令牌 Cookie、令牌落盘可复用、真 SSE + 投影转发（`session/projection` 帧）、`/plugin/status` 不回显令牌、`PUT /plugin/config` 落盘与 `needsRestart` 提示、跨源 `/plugin/*` 403、`ctx.effect` 关停路径真的释放端口（含「不得使用 `ctx.on('dispose')`」的源码守卫）。该测试**先让内核分配空闲端口再写进配置**，**不占用 3091**，使用临时 `DSH_HOME`，不碰真实配置：
+**端到端装配测试** —— 真的调用插件的 `apply(ctx, config)` → 读配置 → 探测宿主 → 起真 http 服务 → 静态托管 → `/api/*` 桥 → `/plugin/*` 端点 → 关停。断言插件形状与 `Config` 容错、上线日志、未探测到网关时如实告警但仍可开页面、**网关晚于插件 provide 时自动接上**（惰性解析 + `kind` getter）、**网关缺席时 `hostEvents` 等待而不是立即结束**、`typertGateway` 与老形态 `apiProxy` 的优先级、首次访问种令牌 Cookie、令牌落盘可复用、真 SSE + 投影转发（`session/projection` 帧）、`/plugin/status` 不回显令牌、`PUT /plugin/config` 落盘与 `needsRestart` 提示、跨源 `/plugin/*` 403、`ctx.effect` 关停路径真的释放端口（含「不得使用 `ctx.on('dispose')`」的源码守卫）。该测试**先让内核分配空闲端口再写进配置**，**不占用 3091**，使用临时 `DSH_HOME`，不碰真实配置：
 
 ```bash
 node test/plugin-boot.mjs
@@ -439,6 +450,12 @@ node test/frontend-wiring.mjs
 
 ```bash
 node test/cordis-proxy.mjs
+```
+
+**patch 装配守卫**（致命 bug 回归）—— 确认 `cordis.patch.yml` 的插件行**没有** `inject:` 字段（尤其没有 `!!js` 形式）。第 1 组是纯静态检查，永远执行；第 2 组在真 cordis + 真 loader + 真 YAML 方言下端到端验证 `Inject.resolve` 的结果里不含 `__jsExpr`，并含一个**对照组**（故意构造坏 patch，证明检测手段不是空转）。依赖不可解析时第 2 组 `SKIP` 并以 0 退出：
+
+```bash
+node test/patch-inject.mjs
 ```
 
 **手动确认** —— 应返回 `200` 与运行信息（`plugin` / `host` / `hostAvailable` / `port` / `requireToken` / `visits` / `marquee` / `node` / `pid` / `uptimeSeconds` / `startedAt`），且**不含** `token` 字段：
@@ -527,11 +544,48 @@ curl -i http://127.0.0.1:3091/plugin/status
 
 1. **未在真实 dsh 进程中挂载验证过 3091 端口。** 本插件的端到端装配由 `node test/plugin-boot.mjs` 用 mock ctx 与假网关验证；该测试**先让内核分配一个空闲端口再写进配置**，因此不会占用 3091（注意：`port: 0` 会被 `mergeConfig` 当作非法值回落到默认 3091，所以测试不能用它）。**真实挂载需要重启 dsh**，重启后才会在 `127.0.0.1:3091` 上真正监听。在那之前，3091 上的行为属于未验证状态。
 
-2. **dsh 0.2.0-rc.2 上 `ctx.apiProxy` 不存在。** `@deepseek-ai/dsh-host-apiproxy` 已从发行版移除，API 网关被重构为 `ctx.typertGateway`（`@deepseek-ai/dsh-api-gateway` 的 `TypertGatewayService`）+ 各域 controller（`sessionController` / `settingsController` / `workspaceController` / `agentPresets` / `permissionPresets` / `llm` / `userQuestions` / `approval` 等）；端点清单由 `@deepseek-ai/dsh-typert-registry` 在运行时从各包的 `typert.host.js` 注册进 `ctx.typert.local`。因此 `lib/index.js` 的 `inject` **刻意留空** —— 参考文档（面向 0.1.x）写的 `inject: [apiProxy]` 会让 Cordis 永远等不到该 service，插件永不激活（启动日志表现为「Plugins waiting for services」）。实际挂载由 `lib/host.js` 在 `apply()` 内做**能力探测**接管，把两种宿主形态归一成同一内部接口（`invoke` / `stream` / `hostEvents` / `resolveEventResult` / `describeEndpoint`），从而**同时兼容** 0.2.0+ 的 `typertGateway` 与 0.1.x 的老形态 `apiProxy`（后者优先级更高）。两者都不存在时插件照常开页面，并在状态接口里如实报告 `hostAvailable: false`，而不是崩掉整个 dsh。
+2. **dsh 0.2.0-rc.2 上 `ctx.apiProxy` 不存在。** `@deepseek-ai/dsh-host-apiproxy` 已从发行版移除，API 网关被重构为 `ctx.typertGateway`（`@deepseek-ai/dsh-api-gateway` 的 `TypertGatewayService`）+ 各域 controller（`sessionController` / `settingsController` / `workspaceController` / `agentPresets` / `permissionPresets` / `llm` / `userQuestions` / `approval` 等）；端点清单由 `@deepseek-ai/dsh-typert-registry` 在运行时从各包的 `typert.host.js` 注册进 `ctx.typert.local`。因此 `lib/index.js` 的 `inject` **留空**（原因见上面第 4 条），挂载由 `lib/host.js` 把两种宿主形态归一成同一内部接口（`invoke` / `stream` / `hostEvents` / `resolveEventResult` / `describeEndpoint`），**同时兼容** 0.2.0+ 的 `typertGateway` 与 0.1.x 的老形态 `apiProxy`（后者优先级更高）。两者都不存在时插件照常开页面，并在状态接口里如实报告 `hostAvailable: false`，而不是崩掉整个 dsh。
+
+   配套的**惰性解析**设计：因为插件是「立即激活」的，网关可能在 `apply()` 之后才 provide。所以 `lib/host.js` 不在构造时绑定一次，而是 ——
+   - `kind` 是 **getter**，每次读取都重新探测，实时反映可用性；
+   - `invoke` / `stream` / `resolveEventResult` / `describeEndpoint` 在**每次调用时**重新 `ctx.get('typertGateway', false)`；
+   - `hostEvents(signal)` 是**等待式生成器**：网关未就绪时先等（响应式 `ctx.inject([...], cb)` + 轮询兜底），出现后再开始转发；流自然结束后若网关仍在且未 abort 会重新接续 —— 因此 `MuxController` 不需要任何重启逻辑。
+
+   回归测试：`test/plugin-boot.mjs` 的「网关晚于插件 provide 时自动接上」与「网关缺席时 hostEvents 等待而不是立即结束」两项。
 
 3. **会话事件不在 0.2.0-rc.2 的网关转发白名单里。** `@deepseek-ai/dsh-api-remotes` 只把一份白名单事件转发给浏览器（`approval/request`、`user-questions/request` 以及各类配置变更），**session 事件不在其中**；0.1.x 的 `apiProxy.events.mux()` 也已不存在。所以 `lib/sse.js` 的 `MuxController` 改为在**宿主进程内直接订阅** `ctx.on('session/event', ..., { global: true })`（并订阅 `session/created` / `session/disposed`）—— 这正是 `dsh-session-controller` 自己 follow 会话时用的方式；`{ global: true }` 拿全局可见性，老版本自动退回两参数形式。实时投影（统计 / 标题 / 待办）另经 `sessionProjections.onChanged` 获取。若宿主未挂该投影服务，插件告警但继续工作，统计与待办只随会话事件更新。
 
-4. **`cordis.patch.yml` 的 `inject` 是 `!!js` 动态判断。** 它只在 `ctx.get('apiProxy', false)` 为真时才声明等待 `apiProxy`，因此新形态部署上插件立即激活；若部署确定是 0.1.x 老形态，该表达式会自动生效，无需手工取消注释。
+4. **`cordis.patch.yml` 的插件行不能写 `inject` 字段（尤其不能写 `!!js`）。** 这是本项目踩过的最致命的一个坑，完整记录如下。
+
+   **症状**：插件装上去后**永不激活**，启动日志停在「Plugins waiting for services」，3091 根本不监听。
+
+   **机制**（用真 cordis 4.x + 真 `cordis-plugin-loader` + 真 YAML 方言逐条复现）：
+
+   1. `cordis-plugin-include` 里 `entryListSchema = yaml.JSON_SCHEMA.extend(JsExpr)`，让**整个 YAML 文档**都按 `!!js` 类型解析 —— 所以 `inject: !!js "..."` 得到的是一个**对象** `{ __jsExpr: "..." }`，而不是字符串或数组。
+   2. loader 的 `interpolate(ctx, value)` **只对 `config` 调用**：
+      `ctx.on("internal/config", function (_config, next) { const config = next(); ...; return interpolate(this.ctx, config) })`。
+      `inject` 不在求值路径上，所以那个表达式**永远不会被求值**。
+   3. `disabled` 有专门处理 —— `disabledOf(options) { return isJsExpr(options.disabled) ? Boolean(this.evaluate(options.disabled.__jsExpr)) : Boolean(options.disabled) }`。**`inject` 没有对应的 `isJsExpr` 分支。**
+   4. `Inject.resolve` 的实现是：
+
+      ```js
+      function resolve(inject, result = Object.create(null)) {
+        if (!inject) return result
+        if (Array.isArray(inject)) for (const name of inject) result[name] = null
+        else if (Reflect.has(inject, symbols.checkProto)) { /* 原型链式注入 */ }
+        else for (const name of Object.keys(inject)) result[name] = inject[name] ?? null
+        return result
+      }
+      ```
+
+      `{__jsExpr:"..."}` 既不是数组、也没有 `checkProto`，于是走最后一条分支 —— **把 `__jsExpr` 当成一个 service 名注册**。实测 `Inject.resolve(...)` → `["__jsExpr"]`。
+   5. loader 的消费点是 `ctx.on("internal/plugin", (fiber) => { ... Inject.resolve(fiber.entry.options.inject, fiber.inject) })`。**只有当 `options.inject` 为 `undefined` 时，插件自己导出的 `inject` 才生效**。
+
+   **正确做法**：**整行删掉 `inject:`**（不是写 `inject: []` —— 空数组同样会覆盖插件导出的值），让 `lib/index.js` 的 `export const inject = []` 生效。
+
+   **回归守卫**：`test/patch-inject.mjs`（8 项）。第 1 组是纯静态检查（不依赖任何外部包，测试机上也能跑）；第 2 组用**真 cordis + 真 loader + 真 YAML 方言**端到端验证，其中有一项是**对照组** —— 故意构造一个带 `inject: !!js` 的 patch，断言检测手段确实能识别出 `{__jsExpr}`，从而证明这个检查不是空转。依赖不可解析时该组打印 `SKIP` 并以 0 退出，不会误报失败。`test/syntax-check.mjs` 另有一条静态守卫。
+
+   顺带一提，`inject: [apiProxy]`（普通数组写法）在 0.2.0-rc.2 上同样会让插件永不激活 —— 因为该版本已无 `apiProxy` service。两种写法都不能用，原因不同。
 
 5. **`test/syntax-check.mjs` 在受限沙箱下会自动降级。** 该脚本用 `node --check` 逐文件校验；若沙箱拒绝子进程的管道 stdio（`EPERM`），脚本会自动退回 `stdio: 'inherit'` 模式仅取退出码，并在输出里注明降级（校验方式仍是同一个 `node --check`）。本机 danger-full-access 模式下不会触发降级。
 

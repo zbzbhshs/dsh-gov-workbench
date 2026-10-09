@@ -185,6 +185,21 @@ check('cordis.patch.yml 存在且用 insert 插入插件行', () => {
   assert.ok(/port:\s*3091/.test(text), '默认端口应为 3091')
 })
 
+check('cordis.patch.yml 的插件行不得出现 inject: 字段（含 !!js 形式）', () => {
+  // 致命 bug 回归守卫：`inject: !!js "..."` 会被 YAML 方言解析成 {__jsExpr}，
+  // 而 loader 只在 config/disabled 上求值 !!js，`Inject.resolve` 于是把
+  // `__jsExpr` 当成服务名 —— 插件永久等待它，永不激活。
+  // 即使写 `inject: []` 也会覆盖插件导出的 inject，所以正确做法是整行删掉。
+  const text = readFileSync(join(ROOT, 'cordis.patch.yml'), 'utf8')
+  // 只看非注释行：注释里正是要说明「不能这么写」。
+  const code = text
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n')
+  assert.ok(!/^\s*inject\s*:/m.test(code), 'cordis.patch.yml 的插件行不得出现 inject: 字段')
+  assert.ok(!/inject\s*:\s*!!js/.test(code), 'cordis.patch.yml 不得出现 `inject: !!js ...`')
+})
+
 check('package.json 声明了 dsh.bundle.patch 与 type: module', () => {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
   assert.equal(pkg.type, 'module')
