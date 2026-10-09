@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>综合政务智能工作台 —— 一网通办 · 智能协同 · 全程留痕</title>
+<link rel="stylesheet" href="/css/gov.css">
+</head>
+<body>
+
+<a id="gov-skip" href="#gov-main" class="gov-visits" style="position:absolute; left:-9999px;">跳到主要内容</a>
+
+<!-- ============================ 顶部工具条 ============================ -->
+<div class="gov-toolbar" role="banner">
+  <div class="gov-toolbar-inner">
+    <a id="gov-set-home" href="#">设为首页</a>
+    <a id="gov-add-fav" href="#">加入收藏</a>
+    <a id="gov-a11y" href="#">无障碍浏览</a>
+    <div class="gov-toolbar-slogan">深入推进一网通办，让数据多跑路、群众少跑腿</div>
+    <div class="gov-toolbar-right">
+      <span id="gov-clock">--</span>
+      <span class="gov-visits" id="gov-visits">本站已被访问：000000 次</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== 主头部 ============================== -->
+<div class="gov-header">
+  <div class="gov-header-inner">
+    <!-- 纯 CSS/SVG 印章徽标，不使用图片文件 -->
+    <div class="gov-emblem" role="img" aria-label="准予办结 印章">
+      <svg width="62" height="62" viewBox="0 0 62 62" aria-hidden="true">
+        <polygon points="31,3 39,10 50,9 52,20 60,27 55,37 57,48 46,51 39,59 31,54 23,59 16,51 5,48 7,37 2,27 10,20 12,9 23,10"
+                 fill="none" stroke="#e4393c" stroke-width="1.6"/>
+        <circle cx="31" cy="31" r="19" fill="none" stroke="#e4393c" stroke-width="1"/>
+      </svg>
+      <span style="position:absolute; font-size:15px;">政务</span>
+    </div>
+    <div class="gov-brand">
+      <h1 class="gov-brand-name">综合政务智能工作台</h1>
+      <div class="gov-brand-sub">一网通办 · 智能协同 · 全程留痕</div>
+    </div>
+    <div class="gov-search" role="search">
+      <label for="gov-query" style="position:absolute; left:-9999px;">站内检索</label>
+      <input id="gov-query" type="text" placeholder="请输入事项名称或卷宗编号">
+      <button id="gov-query-btn" class="gov-btn" type="button">查询</button>
+    </div>
+    <div class="gov-status">
+      <span id="gov-dot" class="gov-dot"></span>
+      <span id="gov-host-state">系统状态: 检测中</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== 主导航 ============================== -->
+<nav class="gov-nav" aria-label="主导航">
+  <div class="gov-nav-inner">
+    <button class="gov-nav-item is-active" type="button" data-page="home">工作台首页</button>
+    <button class="gov-nav-item" type="button" data-page="matters">事项办理</button>
+    <button class="gov-nav-item" type="button" data-page="archive">卷宗档案</button>
+    <button class="gov-nav-item" type="button" data-page="trace">运行轨迹</button>
+    <button class="gov-nav-item" type="button" data-page="settings">系统配置</button>
+    <button class="gov-nav-item" type="button" data-page="rules">规章制度</button>
+  </div>
+</nav>
+
+<!-- ============================== 跑马灯 ============================== -->
+<div class="gov-marquee">
+  <div class="gov-marquee-inner">
+    <span class="gov-marquee-tag">【重要通知】</span>
+    <div class="gov-marquee-view" id="gov-marquee-view"></div>
+  </div>
+</div>
+
+<!-- ============================== 主布局 ============================== -->
+<div class="gov-main" id="gov-main" tabindex="-1">
+
+  <!-- ============================ 工作台首页 ============================ -->
+  <section class="gov-page is-active" data-page="home">
+    <div class="gov-col">
+      <div class="gov-box">
+        <div class="gov-box-head">
+          <div class="gov-box-title">事项受理概览</div>
+          <div class="gov-spacer"></div>
+          <span class="gov-state is-ok" id="gov-run-state">空闲</span>
+        </div>
+        <div class="gov-box-body">
+          <div class="gov-ticket" id="gov-ticket"></div>
+          <div class="gov-hint" style="margin-top:10px;">
+            本工作台通过宿主进程内的 API 网关直连办理引擎，事项、模型、权限、统计全部实时取自宿主，页面不做任何业务预设。
+            接入方式：<span id="gov-host-kind">检测中</span>。
+          </div>
+        </div>
+      </div>
+
+      <div class="gov-box">
+        <div class="gov-box-head">
+          <div class="gov-box-title">常用通道</div>
+          <div class="gov-spacer"></div>
+          <button class="gov-btn gov-btn-plain" type="button" id="gov-refresh">刷新数据</button>
+        </div>
+        <div class="gov-box-body">
+          <ul class="gov-list">
+            <li><button class="gov-link" type="button" data-page-link="matters">前往事项办理，提交新的申办事项</button></li>
+            <li><button class="gov-link" type="button" data-page-link="archive">前往卷宗档案，调阅或导出历史卷宗</button></li>
+            <li><button class="gov-link" type="button" data-page-link="trace">前往运行轨迹，查看每一步办理记录</button></li>
+            <li><button class="gov-link" type="button" data-page-link="settings">前往系统配置，调整宿主各命名空间参数</button></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="gov-box">
+        <div class="gov-box-head">
+          <div class="gov-box-title">本次待办</div>
+        </div>
+        <div class="gov-box-body" id="gov-todos"></div>
+      </div>
+    </div>
+
+    <aside class="gov-side">
+      <div class="gov-box">
+        <div class="gov-box-head"><div class="gov-box-title">便民提示</div></div>
+        <div class="gov-box-body gov-tips">
+          <div>一、提交申办前请确认<strong>工作目录</strong>与<strong>权限档位</strong>，办理过程会真实读写该目录。</div>
+          <div>二、<strong>审批弹窗</strong>出现时请及时核阅，超时未答复该次操作会被判定为未批准。</div>
+          <div>三、办理完成后右上角会加盖<strong>准予办结</strong>印章，可在系统配置中关闭。</div>
+          <div>四、卷宗导出为 JSONL，与宿主会话日志格式一致，可直接用于离线归档。</div>
+        </div>
+      </div>
+      <div class="gov-box">
+        <div class="gov-box-head"><div class="gov-box-title">办理说明</div></div>
+        <div class="gov-box-body gov-tips">
+          <div>事项编号由宿主分配，格式为 <strong>session-*</strong>。</div>
+          <div>统计口径：轮次 / 步数来自 <strong>sessionStats</strong> 投影，token 来自 <strong>tokenUsage</strong> 投影。</div>
+          <div>输入框内按 <strong>Ctrl+Enter</strong> 可直接提交。</div>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ============================ 事项办理 ============================ -->
+  <section class="gov-page" data-page="matters">
+    <div class="gov-col">
+      <div class="gov-box">
+        <div class="gov-box-head">
+          <div class="gov-box-title">事项编号条</div>
+          <div class="gov-spacer"></div>
+          <span class="gov-receipt-meta">参数行下拉全部由宿主动态枚举</span>
+        </div>
+        <div class="gov-box-body">
+          <div class="gov-ticket" id="gov-ticket-2"></div>
+          <div class="gov-params" style="margin-top:12px;">
+            <div class="gov-field">
+              <label class="gov-field-label" for="gov-cwd">工作目录（directoryPicker.list）</label>
+              <select id="gov-cwd"></select>
+              <div class="gov-field-hint" id="gov-cwd-hint">加载中…</div>
+            </div>
+            <div class="gov-field">
+              <label class="gov-field-label" for="gov-permission">权限（permissionPresets.catalog）</label>
+              <select id="gov-permission"></select>
+              <div class="gov-field-hint" id="gov-permission-hint">加载中…</div>
+            </div>
+            <div class="gov-field">
+              <label class="gov-field-label" for="gov-preset">模式（agentPresets.list）</label>
+              <select id="gov-preset"></select>
+              <div class="gov-field-hint" id="gov-preset-hint">加载中…</div>
+            </div>
+            <div class="gov-field">
+              <label class="gov-field-label" for="gov-model">模型（session.modelCatalog）</label>
+              <select id="gov-model"></select>
+              <div class="gov-field-hint" id="gov-model-hint">加载中…</div>
+            </div>
+            <div class="gov-field">
+              <label class="gov-field-label" for="gov-effort">推理强度（随模型动态刷新）</label>
+              <select id="gov-effort"></select>
+              <div class="gov-field-hint" id="gov-effort-hint">加载中…</div>
+            </div>
+            <div class="gov-field">
+              <label class="gov-field-label">目录操作</label>
+              <button class="gov-btn gov-btn-plain" type="button" id="gov-cwd-up">返回上级目录</button>
+              <div class="gov-field-hint">切换目录后会重新枚举子目录。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="gov-box">
+        <div class="gov-box-head">
+          <div class="gov-box-title">交互回执窗口</div>
+          <div class="gov-spacer"></div>
+          <label class="gov-receipt-meta" for="gov-seal-toggle">
+            <input type="checkbox" id="gov-seal-toggle"> 办结盖章
+          </label>
+        </div>
+        <div class="gov-receipt" id="gov-receipt" role="log" aria-live="polite"></div>
+      </div>
+
+      <div class="gov-stats" id="gov-stats" role="status" aria-live="off"></div>
+
+      <div class="gov-box">
+        <div class="gov-box-head">
+          <div class="gov-box-title">申报表单</div>
+          <div class="gov-spacer"></div>
+          <span class="gov-receipt-meta">Ctrl+Enter 提交</span>
+        </div>
+        <div class="gov-box-body">
+          <div class="gov-field">
+            <label class="gov-field-label" for="gov-prompt">申办事项内容</label>
+            <textarea id="gov-prompt" placeholder="请填写本次申办事项的具体内容。提交后将自动受理并开始办理。"></textarea>
+          </div>
+          <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <button class="gov-btn" type="button" id="gov-submit">提交申办</button>
+            <button class="gov-btn gov-btn-danger" type="button" id="gov-cancel" disabled>取消办理</button>
+            <span class="gov-field-hint">首次提交会自动受理新事项（session.create），随后进入办理（session.prompt）。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="gov-side">
+      <div class="gov-box">
+        <div class="gov-box-head"><div class="gov-box-title">办理须知</div></div>
+        <div class="gov-box-body gov-tips">
+          <div>一、权限档位决定沙箱与审批策略；切到<strong>全权访问</strong>会跳过确认，请谨慎选择。</div>
+          <div>二、模型与推理强度按 provider 动态枚举，切换模型后强度选项会自动刷新。</div>
+          <div>三、回执窗口区分<strong>回复 / 思考 / 调用 / 结果 / 轨迹 / 待办</strong>六类，高度固定，流式输出不会引起跳动。</div>
+        </div>
+      </div>
+      <div class="gov-box">
+        <div class="gov-box-head"><div class="gov-box-title">本次统计口径</div></div>
+        <div class="gov-box-body gov-tips">
+          <div>模型耗时 = step/start → assistant/message 墙钟合计。</div>
+          <div>工具耗时 = tool/call → tool/result 按 callId 配对合计。</div>
+          <div>首 token = 首 token 延迟合计 ÷ 记录到首 token 的步数。</div>
+          <div>输出速度 = 本次连接收到字符数 ÷ 解码墙钟。</div>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ============================ 卷宗档案 ============================ -->
+  <section class="gov-page" data-page="archive">
+    <div class="gov-col">
+      <div class="gov-box">
+        <div class="gov-box-head">
+          <div class="gov-box-title">卷宗档案</div>
+          <div class="gov-spacer"></div>
+          <button class="gov-btn gov-btn-plain" type="button" id="gov-archive-reload">重新载入</button>
+        </div>
+        <div class="gov-box-body">
+          <div class="gov-field">
+            <label class="gov-field-label" for="gov-archive-query">卷宗检索（session.search）</label>
+            <input id="gov-archive-query" type="text" placeholder="输入关键词检索卷宗内容，留空显示全部">
+          </div>
+          <div class="gov-field-hint" id="gov-archive-hint" style="margin-top:8px;">加载中…</div>
+        </div>
+        <div class="gov-table-wrap">
+          <table class="gov-table">
+            <thead>
+              <tr>
+                <th>事项编号</th>
+                <th>卷宗标题</th>
+                <th>办理模式</th>
+                <th>状态</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="gov-archive-body"></tbody>
+          </table>
+        </div>
+        <div class="gov-pager">
+          <button class="gov-btn gov-btn-plain" type="button" id="gov-archive-prev">上一页</button>
+          <span id="gov-archive-page">第 1 / 1 页</span>
+          <button class="gov-btn gov-btn-plain" type="button" id="gov-archive-next">下一页</button>
+          <span class="gov-field-hint">「调阅」会把该卷宗的历史回执灌入工作台首页；「导出」下载 JSONL。</span>
+        </div>
+      </div>
+    </div>
+    <aside class="gov-side">
+      <div class="gov-box">
+        <div class="gov-box-head"><div class="gov-box-title">归档说明</div></div>
+        <div class="gov-box-body gov-tips">
+          <div>卷宗列表来自 <strong>session.list</strong>，检索来自 <strong>session.search</strong>。</div>
+          <div>导出走 <strong>/api/session.export</strong>，由宿主会话持久化层直接读取逻辑日志。</div>
+          <div>导出内容为 JSONL：首行会话头，其后每行一个事件。</div>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ============================ 运行轨迹 ============================ -->
+  <section class="gov-page" data-page="trace">
+    <div class="gov-col">
+      <div class="gov-box">
+        <div class="gov-box-head">
+          <div class="gov-box-title">运行轨迹</div>
+          <div class="gov-spacer"></div>
+          <span class="gov-receipt-meta">共 <span id="gov-trace-count">0</span> 条</span>
+          <button class="gov-btn gov-btn-plain" type="button" id="gov-trace-clear">清空</button>
+        </div>
+        <div class="gov-box-body">
+          <div class="gov-params">
+            <div class="gov-field">
+              <label class="gov-field-label" for="gov-trace-filter">按事件类型过滤</label>
+              <input id="gov-trace-filter" type="text" placeholder="例如 assistant/chunk、tool/call、step/start">
+            </div>
+            <div class="gov-field">
+              <label class="gov-field-label" for="gov-trace-autoscroll">自动滚动</label>
+              <input type="checkbox" id="gov-trace-autoscroll">
+              <div class="gov-field-hint">新事件到达时自动滚到底部。</div>
+            </div>
+          </div>
+        </div>
+        <div class="gov-table-wrap" id="gov-trace-scroll" style="max-height:520px; overflow-y:auto;">
+          <table class="gov-table">
+            <thead>
+              <tr>
+                <th>序号</th>
+                <th>时间</th>
+                <th>事件类型</th>
+                <th>会话</th>
+                <th>摘要</th>
+              </tr>
+            </thead>
+            <tbody id="gov-trace-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <aside class="gov-side">
+      <div class="gov-box">
+        <div class="gov-box-head"><div class="gov-box-title">轨迹说明</div></div>
+        <div class="gov-box-body gov-tips">
+          <div>轨迹表记录全部会话事件，包括 <strong>turn/start</strong>、<strong>step/start</strong>、<strong>assistant/chunk</strong>、<strong>tool/call</strong>、<strong>tool/result</strong>、<strong>todo/write</strong> 等。</div>
+          <div>事件类型与序号直接来自宿主会话日志，未做任何改写。</div>
+          <div>表内最多保留最近 400 行渲染，完整记录见卷宗导出。</div>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ============================ 系统配置 ============================ -->
+  <section class="gov-page" data-page="settings">
+    <div class="gov-col">
+      <div class="gov-box">
+        <div class="gov-box-head">
+          <div class="gov-box-title">系统配置（settings.describe 驱动）</div>
+          <div class="gov-spacer"></div>
+          <button class="gov-btn gov-btn-plain" type="button" id="gov-settings-reload">重新读取</button>
+        </div>
+        <div class="gov-box-body">
+          <div class="gov-hint" id="gov-settings-hint">加载中…</div>
+        </div>
+      </div>
+      <div id="gov-settings-list" class="gov-col"></div>
+    </div>
+    <aside class="gov-side">
+      <div class="gov-box">
+        <div class="gov-box-head"><div class="gov-box-title">配置说明</div></div>
+        <div class="gov-box-body gov-tips">
+          <div>表单由宿主 <strong>settings.describe</strong> 返回的 schema 动态生成，覆盖全部命名空间。</div>
+          <div>提交走 <strong>settings.update</strong>，带修订号做乐观并发控制。</div>
+          <div>未改动的字段不会写入；<strong>敏感项</strong>只显示是否已设置，不回显明文。</div>
+          <div>无法识别的 schema 形态会退化为 JSON 文本框，保证任何字段都可编辑。</div>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ============================ 规章制度 ============================ -->
+  <section class="gov-page" data-page="rules">
+    <div class="gov-col">
+      <div class="gov-box">
+        <div class="gov-box-head"><div class="gov-box-title">平台办理规则</div></div>
+        <div class="gov-box-body gov-tips" style="font-size:13px; line-height:2;">
+          <p><strong>第一条　平台定位。</strong>综合政务智能工作台是 DeepSeek Harness 的运行界面，所有办理动作通过宿主进程内的 API 网关派发，与宿主共用同一套会话、模型、权限与统计能力，界面不做任何业务预设。</p>
+          <p><strong>第二条　事项受理。</strong>提交申办后平台自动受理并分配事项编号。编号由宿主分配，全局唯一，不可转让。</p>
+          <p><strong>第三条　权限与审批。</strong>权限档位决定沙箱范围与审批策略。凡涉及目录外写入、外部命令等敏感操作，平台会弹出审批事项；未获批准的操作不会执行，且全程留痕。</p>
+          <p><strong>第四条　全程留痕。</strong>办理过程的每一步（轮次、步数、模型调用、工具调用、待办变更）都会写入会话日志，「运行轨迹」栏目实时展示，「卷宗档案」栏目可导出归档。</p>
+          <p><strong>第五条　统计口径。</strong>界面统计严格取自宿主投影：轮次与步数、模型耗时、工具耗时、首 token 延迟、解码耗时与 token 数来自 <em>sessionStats</em> 投影；输入、输出与缓存 token 来自 <em>tokenUsage</em> 投影。平台不估算、不编造任何统计值。</p>
+          <p><strong>第六条　数据安全。</strong>平台仅监听本机回环地址，所有接口均做来源校验与配对令牌校验，跨源请求一律拒绝。运行配置保存在 <em>$DSH_HOME/gov-workbench.json</em>，界面偏好保存在浏览器本地。</p>
+          <p><strong>第七条　便民服务。</strong>首页提供常用通道与办理须知；「重要通知」栏滚动提示平台状态；便民提示飘窗可拖动、可关闭。</p>
+        </div>
+      </div>
+    </div>
+    <aside class="gov-side">
+      <div class="gov-box">
+        <div class="gov-box-head"><div class="gov-box-title">联系我们</div></div>
+        <div class="gov-box-body gov-tips">
+          <div>主办单位：综合政务智能工作台运维中心</div>
+          <div>技术支持：DeepSeek Harness 插件工程组</div>
+          <div>服务时间：7×24 小时</div>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+</div>
+
+<!-- ============================== 页脚 ============================== -->
+<div class="gov-footer">
+  <div class="gov-footer-inner">
+    <div>主办单位：综合政务智能工作台运维中心　|　技术支持：DeepSeek Harness 插件工程组</div>
+    <div class="gov-footer-beian">XXICP备00000000号-1　XX公网安备00000000000000号</div>
+    <div class="gov-footer-beian">本站为本地部署运行界面，未接入互联网政务服务系统。</div>
+  </div>
+</div>
+
+<!-- ============================== 办结盖章 ============================== -->
+<div class="gov-seal" id="gov-seal" aria-hidden="true">准予办结</div>
+
+<!-- ============================== 弹窗容器 ============================== -->
+<div id="gov-modal-root"></div>
+
+<script src="/js/util.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/store.js"></script>
+<script src="/js/marquee.js"></script>
+<script src="/js/float.js"></script>
+<script src="/js/panels.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# 依赖
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# 运行时生成（插件首次启动会写 $DSH_HOME/gov-workbench.json）
+gov-workbench.json
+
+# 本地配置与产物
+*.local
+*.log
+logs/
+shots/
+dist/
+*.zip
+*.tar.gz
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

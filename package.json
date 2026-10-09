@@ -1,0 +1,47 @@
+{
+  "name": "dsh-gov-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "综合政务智能工作台 —— 一个可独立安装运行的 dsh Cordis 插件：在独立端口（默认 3091）拉起政务门户风格 WebUI，并把浏览器请求 1:1 桥接到宿主进程内的 API 网关。",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "gov",
+    "workbench",
+    "portal"
+  ],
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./bridge": "./lib/bridge.js",
+    "./config": "./lib/config.js",
+    "./host": "./lib/host.js",
+    "./security": "./lib/security.js",
+    "./static": "./lib/static.js",
+    "./sse": "./lib/sse.js",
+    "./transport": "./lib/transport.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "public",
+    "docs",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,49 @@
+# dsh-gov-workbench bundle patch
+#
+# 这个文件是 `package.json` 里 `dsh.bundle.patch` 指向的层。安装时走官方
+# CLI：
+#
+#   dsh plugin --profile desktop add link:<本目录>
+#
+# 该命令会在 profile 目录执行 pnpm install，然后 reconcile
+# `dsh.profile.bundles`：看到本包声明了 `dsh.bundle.patch`，就把
+# `dsh-gov-workbench` 追加进 bundle 栈。profile boot 再把下面这个
+# `- insert:` 合并进 cordis 树，等价于手写一行挂载。
+#
+# 关于 inject：
+#   参考文档（面向 dsh 0.1.x）写的 `inject: [apiProxy]` 在本机
+#   dsh 0.2.0-rc.2 上会让插件**永不激活** —— 那个版本里
+#   `@deepseek-ai/dsh-host-apiproxy` 已被移除，`apiProxy` service 不存在，
+#   Cordis 会一直把它挂在「Plugins waiting for services」里。0.2.0 起的
+#   API 网关是 `typertGateway` + 各域 controller（sessionController /
+#   settingsController / workspaceController / agentPresets / llm 等）。
+#
+#   所以这里**不硬编码 inject**，而是用一个 `!!js` 表达式：只有当
+#   `apiProxy` 这个 service 真的存在时（0.1.x 老形态）才声明等待它；
+#   0.2.0+ 上表达式求值为 `[]`，插件立即激活，由 `lib/host.js` 在 apply()
+#   内的能力探测接管。两种宿主形态都能挂上，也不会卡在
+#   「Plugins waiting for services」。
+#
+#   注：`ctx.get(name, false)` 的第二参数 `false` 表示「不要求已注入」，
+#   缺失时返回 undefined 而不是抛错 —— 这一点在 cordis 上是必须的，
+#   因为直接读 `ctx.apiProxy` 属性会抛 `cannot get property ... without inject`。
+- insert:
+    - id: gov-workbench
+      name: 'dsh-gov-workbench'
+      # 老形态部署上自动等 apiProxy；新形态（0.2.0+）上该表达式为 false，
+      # 插件立即激活，由 host.js 的探测接管。
+      inject: !!js "ctx.get('apiProxy', false) ? ['apiProxy'] : []"
+      config:
+        # 端口刻意避开 3080（dsh 主 GUI）与 3081（原版 gov-portal）。
+        port: 3091
+        host: '127.0.0.1'
+        # 配对令牌默认开启；首次启动会把自动生成的令牌写进
+        # $DSH_HOME/gov-workbench.json。
+        requireToken: true
+        # 无 Origin 头的请求（同源导航 / curl / 本地脚本）放行。
+        allowNoOrigin: true
+        # 写请求必须带 application/json，堵掉 text/plain 简单请求绕过预检。
+        requireJsonContentType: true
+        # 办结盖章动画与飘窗，可在页面上关。
+        sealOnComplete: true
+        floatEnabled: true
