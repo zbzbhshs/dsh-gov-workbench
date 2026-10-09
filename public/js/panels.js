@@ -149,17 +149,23 @@
    * 数据来源（严格按宿主字段，不编造）：
    *   - `sessionStats` 投影：turns / steps / llmMs / toolMs / ttftMs /
    *     ttftSteps / decodeMs / decodeTokens
-   *   - `tokenUsage` 投影：inputTokens / outputTokens / cacheReadTokens / cacheWriteTokens
+   *   - `tokenUsage` 投影：**`{ totals: { uncachedInputTokens, outputTokens,
+   *     cacheReadTokens, cacheWriteTokens }, last: {...} | null }`**。
+   *     token 数嵌套在 `totals` 下（`@deepseek-ai/dsh-token-meter` 的
+   *     `tokenUsageStateSchema` 实测），读平铺字段会永远拿到 0。
+   *     输入侧口径是 `uncachedInputTokens`（**不含**缓存读入的部分），
+   *     所以缓存命中率 = cacheReadTokens / (uncachedInputTokens + cacheReadTokens)。
    *   - 本地增量：本次连接收到的 chunk 数与文本字符数（用于字/秒）
    */
   function renderStats(root, runtime) {
     var stats = runtime.stats || {}
-    var usage = runtime.usage || {}
+    var usage = usageTotals(runtime.usage)
     var decodeSeconds = Number(stats.decodeMs) > 0 ? Number(stats.decodeMs) / 1000 : 0
     var charsPerSecond = decodeSeconds > 0 && runtime.textChars > 0 ? runtime.textChars / decodeSeconds : 0
     var ttftAverage = Number(stats.ttftSteps) > 0 ? Number(stats.ttftMs) / Number(stats.ttftSteps) : 0
     var cacheTotal = Number(usage.cacheReadTokens || 0) + Number(usage.cacheWriteTokens || 0)
-    var cacheHitRate = Number(usage.inputTokens) > 0 ? Number(usage.cacheReadTokens || 0) / Number(usage.inputTokens) : 0
+    var inputTotal = Number(usage.uncachedInputTokens || 0) + Number(usage.cacheReadTokens || 0)
+    var cacheHitRate = inputTotal > 0 ? Number(usage.cacheReadTokens || 0) / inputTotal : 0
 
     var cells = [
       ['轮次', util.formatInt(stats.turns), false],
@@ -170,7 +176,7 @@
       ['解码耗时', util.formatMs(stats.decodeMs), true],
       ['解码 token', util.formatInt(stats.decodeTokens), false],
       ['输出速度', charsPerSecond > 0 ? charsPerSecond.toFixed(1) + ' 字/秒' : '—', true],
-      ['输入 token', util.formatInt(usage.inputTokens), false],
+      ['输入 token', util.formatInt(usage.uncachedInputTokens), false],
       ['输出 token', util.formatInt(usage.outputTokens), false],
       ['缓存命中', cacheTotal > 0 ? util.formatInt(usage.cacheReadTokens) + '（' + (cacheHitRate * 100).toFixed(1) + '%）' : '—', true],
       ['缓存写入', util.formatInt(usage.cacheWriteTokens), false],
@@ -188,6 +194,32 @@
         ]),
       )
     })
+  }
+
+  /**
+   * 从 tokenUsage 投影值里取出四个桶。
+   *
+   * 投影值有两个合法来源，都归一到这里：
+   *   - 投影推送：`{ totals: {...}, last: {...} | null }`（嵌套）
+   *   - 会话事件 `assistant/message` 的 `data.usage`：`TokenUsage`
+   *     `{ inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens? }`
+   *     —— 这里的 `inputTokens` 语义等于 `uncachedInputTokens`。
+   * 两种都做防御式读取，缺字段按 0，不做任何推算。
+   *
+   * @param value - 投影值或事件 usage。
+   * @returns `{ uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }`。
+   */
+  function usageTotals(value) {
+    var source = value === null || typeof value !== 'object' ? {} : value
+    var totals = source.totals !== null && typeof source.totals === 'object' ? source.totals : source
+    var input = totals.uncachedInputTokens
+    if (typeof input !== 'number') input = totals.inputTokens
+    return {
+      uncachedInputTokens: Number(input) || 0,
+      outputTokens: Number(totals.outputTokens) || 0,
+      cacheReadTokens: Number(totals.cacheReadTokens) || 0,
+      cacheWriteTokens: Number(totals.cacheWriteTokens) || 0,
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -730,6 +762,7 @@
     describeBridge: describeBridge,
     renderTranscript: renderTranscript,
     renderStats: renderStats,
+    usageTotals: usageTotals,
     renderTodos: renderTodos,
     fillSelect: fillSelect,
     fillModelSelect: fillModelSelect,

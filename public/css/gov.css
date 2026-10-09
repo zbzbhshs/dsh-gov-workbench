@@ -445,6 +445,11 @@ a:hover { text-decoration: underline; }
 
 .gov-field-hint { font-size: 11px; color: var(--gov-text-3); }
 
+/* 工作目录降级形态：可手动编辑的输入框 + 浏览按钮同排。 */
+.gov-field input[hidden],
+.gov-field select[hidden],
+.gov-field button[hidden] { display: none; }
+
 /* ============================== 交互回执窗口 ============================== */
 
 .gov-receipt {

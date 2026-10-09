@@ -326,7 +326,7 @@ await test('POST /api/session.list 返回正确的 server-response 信封', asyn
   }
 })
 
-await test('域名别名映射：session→session、agentPreset→agentPresets、host→directoryPicker', async () => {
+await test('域名别名映射：session→session、agentPreset→agentPresets、skill→skills', async () => {
   const server = await startTestServer()
   try {
     const headers = sameOriginHeaders(server.origin)
@@ -335,17 +335,31 @@ await test('域名别名映射：session→session、agentPreset→agentPresets�
       headers,
       body: JSON.stringify({ type: 'client-request', rpcId: 'r1', method: 'agentPreset.list', payload: {} }),
     })
-    await fetch(`${server.url}/api/directoryPicker.list`, {
+    await fetch(`${server.url}/api/skill.list`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ type: 'client-request', rpcId: 'r2', method: 'directoryPicker.list', payload: { path: 'C:\\demo' } }),
+      body: JSON.stringify({ type: 'client-request', rpcId: 'r2', method: 'skill.list', payload: { sessionId: 's' } }),
     })
     const endpoints = server.bridge.calls.map((call) => call.endpoint)
     assert.ok(endpoints.includes('agentPresets/list'), `缺少 agentPresets/list，实际 ${endpoints.join(', ')}`)
-    assert.ok(endpoints.includes('directoryPicker/list'), `缺少 directoryPicker/list，实际 ${endpoints.join(', ')}`)
+    // `skill.list` 必须映射到**复数** namespace `skills/list`：宿主只注册了后者。
+    assert.ok(endpoints.includes('skills/list'), `缺少 skills/list，实际 ${endpoints.join(', ')}`)
   } finally {
     await server.close()
   }
+})
+
+await test('已删除的错误映射：host 不再被改写成 directoryPicker', async () => {
+  // `host.describe` / `host.listDirectory` 是 0.1.x apiProxy 时代的端点，在
+  // 0.2.0-rc.2 的 typert 面上不存在。旧映射把域名 `host` 改写成
+  // `directoryPicker`，产生 `directoryPicker/describe`、
+  // `directoryPicker/listDirectory` 两个必然 invocation-unavailable 的幽灵端点。
+  const { toNamespace } = await import('../lib/host.js')
+  assert.equal(toNamespace('host'), 'host', 'host 不得再被改写成 directoryPicker')
+  assert.equal(toNamespace('directoryPicker'), 'directoryPicker')
+  assert.equal(toNamespace('session'), 'session')
+  assert.equal(toNamespace('skills'), 'skills')
+  assert.equal(toNamespace('subagents'), 'subagents')
 })
 
 await test('buildArgs 按宿主描述符裁剪参数（多参数端点）', async () => {
@@ -354,11 +368,11 @@ await test('buildArgs 按宿主描述符裁剪参数（多参数端点）', asyn
     server.bridge.setDescribe({
       'session/selectModel': {
         invocation: { kind: 'direct' },
-        parameters: [{ wire: 'request' }],
+        parameters: [{ wire: 'request', source: 'json' }],
       },
       'llm/discoverModels': {
         invocation: { kind: 'direct' },
-        parameters: [{ wire: 'settingsNs' }, { wire: 'request' }],
+        parameters: [{ wire: 'settingsNs', source: 'json' }, { wire: 'request', source: 'json' }],
       },
     })
     const headers = sameOriginHeaders(server.origin)
@@ -388,6 +402,57 @@ await test('buildArgs 按宿主描述符裁剪参数（多参数端点）', asyn
     const multi = server.bridge.calls.find((call) => call.endpoint === 'llm/discoverModels')
     assert.ok(multi !== undefined, '未调用 llm/discoverModels')
     assert.deepEqual(multi.args, { settingsNs: 'llm-x', request: { baseURL: 'http://x' } }, '未声明的键必须被裁掉')
+  } finally {
+    await server.close()
+  }
+})
+
+await test('buildArgs 对 acceptsUndefined 的 wire 允许整个缺席（directoryPicker/list 的真实形状）', async () => {
+  // 实测：`directoryPicker/list` 只有一个 wire `path`，且描述符带
+  // `acceptsUndefined: true`。宿主的 assertExactArguments 把这类参数放进
+  // acceptsMissing（字段可以整个不出现），所以空 payload **必须**投影成 `{}`。
+  // 旧实现包成 `{path: {}}`，宿主回
+  // `gateway/input-invalid: wire field "path" failed boundary validation`。
+  const server = await startTestServer()
+  try {
+    server.bridge.setDescribe({
+      'directoryPicker/list': {
+        invocation: { kind: 'direct' },
+        parameters: [{ wire: 'path', source: 'json', acceptsUndefined: true }],
+      },
+      'agentPresets/select': {
+        invocation: { kind: 'direct' },
+        parameters: [{ wire: 'agentId', source: 'lookup' }, { wire: 'agentPreset', source: 'json' }],
+      },
+    })
+    const headers = sameOriginHeaders(server.origin)
+    await fetch(`${server.url}/api/directoryPicker.list`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'client-request', rpcId: 'r5', method: 'directoryPicker.list', payload: {} }),
+    })
+    await fetch(`${server.url}/api/directoryPicker.list`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'client-request', rpcId: 'r6', method: 'directoryPicker.list', payload: { path: 'C:\\demo' } }),
+    })
+    await fetch(`${server.url}/api/agentPreset.select`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        type: 'client-request',
+        rpcId: 'r7',
+        method: 'agentPreset.select',
+        payload: { agentId: 'session-1', agentPreset: 'standard' },
+      }),
+    })
+    const calls = server.bridge.calls.filter((call) => call.endpoint === 'directoryPicker/list')
+    assert.equal(calls.length, 2)
+    assert.deepEqual(calls[0].args, {}, '空 payload 必须投影成 {} —— 不能塞占位对象')
+    assert.deepEqual(calls[1].args, { path: 'C:\\demo' })
+    const select = server.bridge.calls.find((call) => call.endpoint === 'agentPresets/select')
+    assert.ok(select !== undefined, '未调用 agentPresets/select')
+    assert.deepEqual(select.args, { agentId: 'session-1', agentPreset: 'standard' }, 'agentPresets/select 的两个 wire 名必须都在')
   } finally {
     await server.close()
   }

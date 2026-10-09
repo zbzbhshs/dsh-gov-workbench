@@ -112,7 +112,17 @@
       settings: [],
       workspaces: [],
       stats: null,
-      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      /** 宿主投影快照：key → 值（`session.projections` 的 `values`）。 */
+      projections: {},
+      /** 投影快照的游标，用作 `session.page` 的 throughSeq 上界。 */
+      projectionsAsOfSeq: 0,
+      /** 打开页面时探到的宿主能力说明（逐条给人看）。 */
+      capabilities: [],
+      /** 当前会话的办理模式（取自 agentPreset 投影或本地选择）。 */
+      preset: '',
+      /** 当前会话标题（取自 title 投影）。 */
+      sessionTitle: '',
       todos: [],
       transcript: [],
       trace: [],

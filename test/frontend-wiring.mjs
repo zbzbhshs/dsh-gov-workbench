@@ -196,6 +196,112 @@ test('app.js 调用 settings.update 时传位置参数而非裸 payload', () => 
   assert.ok(/^'|^"/.test(args[0]), `第一个参数应是命名空间字符串，实际：${args[0]}`)
 })
 
+/* ------------------------------------------------------------------ */
+/* 宿主 schema 回归：这些字段漏了就是真机上「提交不出去」               */
+/* ------------------------------------------------------------------ */
+
+console.log('\n宿主必填字段回归（app.asar 的 zod schema 实测）\n')
+
+const apiJs = read('public/js/api.js')
+
+test('session.prompt 的 payload 必含 requestId（否则 boundary validation 失败）', () => {
+  // 权威 schema（@deepseek-ai/dsh-api-session-controller#session/prompt）：
+  //   { requestId, sessionId, mode, content, clientTimeZone? }
+  // 漏 requestId 会得到
+  //   gateway/input-invalid: wire field "request" failed boundary validation
+  const at = apiJs.indexOf("unary('session.prompt'")
+  assert.ok(at !== -1, 'api.js 缺少 session.prompt 包装')
+  const body = apiJs.slice(at, at + 900)
+  assert.ok(/requestId:/.test(body), 'session.prompt 的 payload 必须带 requestId')
+  assert.ok(/util\.uuid\(\)/.test(body), 'requestId 必须每次生成唯一值（util.uuid）')
+  assert.ok(/mode:/.test(body) && /content:/.test(body), 'session.prompt 必须带 mode 与 content')
+  // app.js 侧也必须显式给一次（便于同一轮内关联回执）。
+  assert.ok(/requestId:\s*util\.uuid\(\)/.test(appJs), 'app.js 提交时必须显式带 requestId')
+})
+
+test('session.selectModel 的 payload 必含 provider（否则 input-invalid）', () => {
+  // 权威 schema（session/selectModel）：
+  //   { sessionId, provider, model, reasoningEffort? }
+  const at = appJs.indexOf('api.sessions.selectModel(')
+  assert.ok(at !== -1, 'app.js 应调用 session.selectModel')
+  const body = appJs.slice(at, at + 700)
+  assert.ok(/provider:\s*store\.get\('provider'\)/.test(body), 'selectModel 必须带 provider（取自 modelCatalog 分组 id）')
+  assert.ok(/model:\s*store\.get\('model'\)/.test(body), 'selectModel 必须带 model')
+  // provider 必须来自 modelCatalog 的分组，不能是硬编码常量。
+  assert.ok(/modelOptionsFromCatalog|modelGroups/.test(appJs), 'provider/model 应来自 session.modelCatalog 的分组')
+})
+
+test('reasoningEffort 会回落到模型自己的 defaultEffort', () => {
+  // 规则：下拉选中的值不在新模型的 reasoning.efforts 里 → 用该模型的
+  // defaultEffort；两者都没有 → 不带该字段。绝不硬编码任何档位名。
+  const at = appJs.indexOf('function effectiveEffort')
+  assert.ok(at !== -1, 'app.js 缺少 effectiveEffort 回落逻辑')
+  const body = appJs.slice(at, at + 1200)
+  assert.ok(/info\.efforts\.some/.test(body), '必须校验所选强度是否仍在该模型的 efforts 里')
+  assert.ok(/info\.defaultEffort/.test(body), '必须回落到该模型的 defaultEffort')
+  assert.ok(/effortsForModel/.test(body), '强度选项必须取自模型目录')
+  // 不得出现硬编码的档位名。
+  for (const literal of ["'low'", "'medium'", "'high'", '"low"', '"medium"', '"high"']) {
+    assert.ok(!body.includes(literal), `effectiveEffort 不得硬编码档位 ${literal}`)
+  }
+})
+
+test('agentPreset.select 传两个独立 wire（agentId + agentPreset）', () => {
+  // 描述符：scope { context:'agent', wire:'agentId' } + parameters
+  //         [ agentId(lookup), agentPreset(json) ]
+  // 传 {sessionId, agentPreset} 会得到
+  //   gateway/arguments-invalid: missing "agentId"
+  const at = apiJs.indexOf('agentPreset.select')
+  assert.ok(at !== -1, 'api.js 应提供 agentPreset.select')
+  const body = apiJs.slice(at, at + 500)
+  assert.ok(/agentId:\s*sessionId/.test(body), 'agentPreset.select 必须把 agentId 映射到会话身份')
+  assert.ok(/agentPreset:\s*agentPreset/.test(body), 'agentPreset.select 必须带 agentPreset')
+  assert.ok(!/sessionId:\s*sessionId/.test(body), 'agentPreset.select 不得传 sessionId 这个 wire 名')
+})
+
+test('skills 走复数 namespace skills/list 且必带 sessionId', () => {
+  const at = apiJs.indexOf('skills:')
+  assert.ok(at !== -1, 'api.js 应提供 skills 域')
+  const body = apiJs.slice(at, at + 200)
+  assert.ok(/unary\('skills\.list'/.test(body), "真实端点是 skills.list（复数），不是 skill.list")
+  assert.ok(!/'skill\.list'/.test(apiJs), 'api.js 不得再引用幽灵端点 skill.list')
+  assert.ok(/api\.skills\.list\(\{\s*sessionId/.test(appJs), 'skills/list 必带 sessionId')
+})
+
+test('不再调用幽灵端点 host.describe / host.listDirectory / subagent.list / workspace.list', () => {
+  for (const ghost of ["'host.describe'", "'host.listDirectory'", "'subagent.list'", "'workspace.list'"]) {
+    assert.ok(!apiJs.includes(ghost), `api.js 仍在调用幽灵端点 ${ghost}`)
+  }
+  assert.ok(!/\bhost:\s*\{/.test(apiJs), 'api.js 不应再暴露 host.* 域')
+})
+
+test('工作目录不可列举时降级为手动输入 + 原生选择', () => {
+  // 根因错误码实测为 directory-picker/unavailable（宿主组合的是原生选择器）。
+  assert.ok(/directory-picker\/unavailable/.test(apiJs), 'describeError 必须识别 directory-picker/unavailable')
+  assert.ok(/directoryPicker\.pick/.test(apiJs), 'api.js 必须提供 directoryPicker.pick')
+  const at = appJs.indexOf('function setCwdMode')
+  assert.ok(at !== -1, 'app.js 缺少 setCwdMode 降级切换')
+  const body = appJs.slice(at, at + 1200)
+  assert.ok(/select\.hidden/.test(body) && /input\.hidden/.test(body), '降级时必须切换下拉与输入框的可见性')
+  assert.ok(/gov-cwd-input/.test(body), '降级后必须暴露可手动编辑的输入框')
+  assert.ok(/gov-cwd-browse/.test(appJs), '必须有「浏览…」按钮走 directoryPicker.pick')
+  assert.ok(/gov-cwd-mode/.test(appJs), '必须如实显示当前模式')
+})
+
+test('会话检索被宿主禁用时给出可理解的原因', () => {
+  assert.ok(/session search is disabled/.test(apiJs), 'describeError 必须识别宿主禁用检索的原因')
+  assert.ok(/宿主未启用会话检索/.test(apiJs), '必须给出「宿主未启用会话检索」这类可读说明')
+})
+
+test('tokenUsage 按嵌套的 totals 读取（不是平铺字段）', () => {
+  const at = read('public/js/panels.js').indexOf('function usageTotals')
+  assert.ok(at !== -1, 'panels.js 缺少 usageTotals 归一化')
+  const body = read('public/js/panels.js').slice(at, at + 900)
+  assert.ok(/source\.totals/.test(body), '必须优先读 tokenUsage.totals')
+  assert.ok(/uncachedInputTokens/.test(body), '输入侧口径是 uncachedInputTokens')
+  assert.ok(/inputTokens/.test(body), '必须兼容事件 usage 的 inputTokens')
+})
+
 console.log('\n' + '─'.repeat(64))
 if (failed === 0) {
   console.log(`frontend-wiring: 全部通过（${passed} 项）`)

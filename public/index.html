@@ -152,8 +152,10 @@
           <div class="gov-ticket" id="gov-ticket-2"></div>
           <div class="gov-params" style="margin-top:12px;">
             <div class="gov-field">
-              <label class="gov-field-label" for="gov-cwd">工作目录（directoryPicker.list）</label>
+              <label class="gov-field-label" for="gov-cwd">工作目录（directoryPicker.list / pick）</label>
               <select id="gov-cwd"></select>
+              <input id="gov-cwd-input" type="text" hidden placeholder="直接填写工作目录绝对路径，例如 D:\工作卷宗">
+              <div class="gov-field-hint" id="gov-cwd-mode">当前模式：检测中…</div>
               <div class="gov-field-hint" id="gov-cwd-hint">加载中…</div>
             </div>
             <div class="gov-field">
@@ -178,8 +180,9 @@
             </div>
             <div class="gov-field">
               <label class="gov-field-label">目录操作</label>
+              <button class="gov-btn gov-btn-plain" type="button" id="gov-cwd-browse">浏览…（原生选择）</button>
               <button class="gov-btn gov-btn-plain" type="button" id="gov-cwd-up">返回上级目录</button>
-              <div class="gov-field-hint">切换目录后会重新枚举子目录。</div>
+              <div class="gov-field-hint">「浏览…」调用宿主的原生目录选择器（directoryPicker.pick）；列举可用时切换目录会自动重新枚举子目录。</div>
             </div>
           </div>
         </div>

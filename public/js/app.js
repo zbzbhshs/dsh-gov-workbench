@@ -49,6 +49,13 @@
     void loadSettings()
     openEventStream()
     startFloats()
+    // 当前会话的投影快照要拉一次，否则统计行会停在初始值
+    // （事件流只推变更，不推初始状态）。
+    if (store.get('sessionId')) {
+      void loadProjections(store.get('sessionId'))
+      void loadHistory(store.get('sessionId'))
+    }
+    void probeHostCapabilities()
   }
 
   /** 顶部工具条：设为首页 / 加入收藏 / 无障碍浏览。 */
@@ -145,6 +152,44 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* 宿主能力自检                                                        */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * 打开页面时把「宿主真实支持什么」探一遍并如实写进轨迹。
+   *
+   * 这一项不改变任何业务行为，只回答用户看到的第一句疑问「装上了但没什么用」：
+   * 到底是插件没接上、网关没就绪，还是某个能力被部署配置关掉了。所有结论都
+   * 来自宿主自己的返回，插件不猜。
+   */
+  async function probeHostCapabilities() {
+    var notes = []
+    notes.push('宿主接入方式：' + panels.describeBridge(runtime.hostKind))
+    // 目录能力：三个真实动词里，只有 pick 是任何组合都有的。
+    var listing = await api.directoryPicker.list({})
+    notes.push(listing.ok
+      ? '工作目录：可列举'
+      : '工作目录：' + api.describeError(listing.error) + '（已降级为手动输入 + 原生选择）')
+    // 会话检索：参数对，但宿主可能没建索引。
+    var search = await api.sessions.search({ query: '__gov_probe__' })
+    notes.push(search.ok
+      ? '会话检索：可用'
+      : '会话检索：' + api.describeError(search.error))
+    // 技能目录：真实端点是 skills/list，必填 sessionId。
+    var sessionId = store.get('sessionId')
+    if (sessionId) {
+      var skills = await api.skills.list({ sessionId: sessionId })
+      notes.push(skills.ok
+        ? '技能目录：' + String((skills.value && skills.value.skills ? skills.value.skills.length : 0)) + ' 项可用'
+        : '技能目录：' + api.describeError(skills.error))
+    }
+    runtime.capabilities = notes
+    notes.forEach(function (note) {
+      appendReceipt('trace', note, { title: '宿主能力自检' })
+    })
+  }
+
+  /* ------------------------------------------------------------------ */
   /* 插件运行信息与访问计数                                               */
   /* ------------------------------------------------------------------ */
 
@@ -152,7 +197,7 @@
     var result = await api.workbench.status()
     if (!result.ok) {
       setHostState('fail', '宿主状态读取失败')
-      runtime.lastError = result.error.message
+      runtime.lastError = api.describeError(result.error)
       return
     }
     var value = result.value || {}
@@ -191,18 +236,75 @@
 
   /* ------------------------------------------------------------------ */
   /* 参数行：工作目录                                                    */
+  /*                                                                     */
+  /* 宿主的目录能力只有三个真实动词（descriptor 实测）：                    */
+  /*   directoryPicker/list            —— 需要 browse capability          */
+  /*   directoryPicker/pick            —— 原生选择器，任何组合都可用        */
+  /*   directoryPicker/createDirectory —— path + name 两个 wire           */
+  /*                                                                     */
+  /* `list` 在只组合了原生选择器的机器上会回 `directory-picker/unavailable`。 */
+  /* 那时**不能只是禁用下拉**：降级为「可手动编辑的输入框 + 浏览…按钮」，    */
+  /* 并把当前模式如实写在提示里。                                         */
   /* ------------------------------------------------------------------ */
+
+  /** 当前工作目录的获取模式：'browse' | 'native' | 'manual'。 */
+  var cwdMode = 'browse'
+
+  /**
+   * 切换工作目录输入形态。
+   * @param mode - 'browse'（可列举）/ 'native'（仅原生选择）/ 'manual'（手动输入）。
+   * @param note - 追加到提示里的原因说明。
+   */
+  function setCwdMode(mode, note) {
+    cwdMode = mode
+    var select = util.$('gov-cwd')
+    var input = util.$('gov-cwd-input')
+    var browse = util.$('gov-cwd-browse')
+    var up = util.$('gov-cwd-up')
+    var listing = mode === 'browse'
+    select.hidden = !listing
+    input.hidden = listing
+    // 原生选择与手动输入都需要「浏览…」；纯列举模式也保留，方便直接弹对话框。
+    browse.hidden = false
+    up.disabled = listing ? false : (store.get('workspace') || '') === ''
+    util.$('gov-cwd-mode').textContent = listing
+      ? '当前模式：可列举（directoryPicker.list 可用）'
+      : mode === 'native'
+        ? '当前模式：仅原生选择（宿主只组合了原生选择器，请用「浏览…」或直接填写路径）'
+        : '当前模式：手动输入（目录枚举不可用，请直接填写路径或点「浏览…」）'
+    if (note) util.$('gov-cwd-mode').textContent += ' · ' + note
+  }
+
+  /** 让下拉与输入框都反映同一个工作目录值。 */
+  function applyCwd(path) {
+    var value = typeof path === 'string' ? path : ''
+    store.set('workspace', value)
+    util.$('gov-cwd-input').value = value
+    util.$('gov-cwd-up').disabled = value === ''
+  }
 
   async function loadDirectory(path) {
     var select = util.$('gov-cwd')
     var target = typeof path === 'string' && path !== '' ? path : (store.get('workspace') || '')
+    // `path` 在描述符里声明了 acceptsUndefined，空值时**整个省略该键**。
     var payload = target === '' ? {} : { path: target }
     var result = await api.directoryPicker.list(payload)
     if (!result.ok) {
       util.clear(select)
       select.appendChild(el('option', { value: '', text: '（工作目录枚举失败）' }))
       select.disabled = true
-      util.$('gov-cwd-hint').textContent = '目录枚举失败：' + result.error.message
+      var code = String((result.error && result.error.code) || '')
+      if (code === 'directory-picker/unavailable') {
+        setCwdMode('native')
+        applyCwd(target)
+        util.$('gov-cwd-hint').textContent = '目录枚举不可用：' + api.describeError(result.error) +
+          '。已降级为手动输入 + 原生选择。'
+      } else {
+        setCwdMode('manual')
+        applyCwd(target)
+        util.$('gov-cwd-hint').textContent = '目录枚举失败：' + api.describeError(result.error) +
+          '。已降级为手动输入。'
+      }
       return
     }
     var value = result.value || {}
@@ -215,16 +317,43 @@
       options.push({ value: value.home, label: value.home })
     }
     var current = typeof value.path === 'string' ? value.path : target
-    panels.fillSelect(select, options, current, '（无子目录）')
+    var filled = panels.fillSelect(select, options, current, '（无子目录）')
+    if (!filled) {
+      // 有 path 但没有可选项（空目录）：仍是列举模式，只是没有子目录。
+      select.hidden = false
+      util.$('gov-cwd-input').hidden = true
+    }
+    setCwdMode('browse')
     if (!select.disabled && select.value !== current) {
       // 让「当前目录」始终是默认项
       select.value = options.length > 0 ? options[0].value : ''
     }
-    store.set('workspace', select.value)
+    applyCwd(select.disabled ? current : select.value)
     var crumbs = (value.crumbs || []).map(function (crumb) { return crumb.name })
     util.$('gov-cwd-hint').textContent = '当前：' + (value.path || '—') +
       (crumbs.length > 0 ? '（' + crumbs.join(' / ') + '）' : '') +
       (value.truncated ? ' · 已截断' : '')
+  }
+
+  /**
+   * 弹宿主的原生目录选择器。
+   *
+   * `directoryPicker/pick` 没有任何参数（descriptor 实测），返回
+   * `string | null`；用户取消时为 null，此时保持原值不变。
+   */
+  async function browseDirectory() {
+    var result = await api.directoryPicker.pick()
+    if (!result.ok) {
+      util.$('gov-cwd-hint').textContent = '原生选择失败：' + api.describeError(result.error)
+      return
+    }
+    var picked = result.value
+    if (typeof picked !== 'string' || picked === '') {
+      util.$('gov-cwd-hint').textContent = '已取消原生选择，工作目录保持：' + (store.get('workspace') || '（未设置）')
+      return
+    }
+    applyCwd(picked)
+    await loadDirectory(picked)
   }
 
   /* ------------------------------------------------------------------ */
@@ -238,7 +367,7 @@
       util.clear(select)
       select.appendChild(el('option', { value: '', text: '（权限目录不可用）' }))
       select.disabled = true
-      util.$('gov-permission-hint').textContent = '权限目录读取失败：' + result.error.message
+      util.$('gov-permission-hint').textContent = '权限目录读取失败：' + api.describeError(result.error)
       return
     }
     var value = result.value || {}
@@ -266,7 +395,7 @@
       util.clear(select)
       select.appendChild(el('option', { value: '', text: '（模式列表不可用）' }))
       select.disabled = true
-      util.$('gov-preset-hint').textContent = '模式列表读取失败：' + result.error.message
+      util.$('gov-preset-hint').textContent = '模式列表读取失败：' + api.describeError(result.error)
       return
     }
     var value = result.value || {}
@@ -295,7 +424,7 @@
       util.clear(select)
       select.appendChild(el('option', { value: '', text: '（模型目录不可用）' }))
       select.disabled = true
-      util.$('gov-model-hint').textContent = '模型目录读取失败：' + result.error.message
+      util.$('gov-model-hint').textContent = '模型目录读取失败：' + api.describeError(result.error)
       refreshEfforts()
       return
     }
@@ -420,6 +549,65 @@
     }
   }
 
+  /**
+   * 处理一条投影变更帧（`session/projection`）。
+   *
+   * 帧形状：`{ type:'session/projection', sessionId, key, value, seq }`。
+   * 页面把宿主给的原值原样存进 `runtime.projections`，统计行只读宿主的
+   * `sessionStats` / `tokenUsage` 两个投影 —— **不做任何估算或推算**。
+   *
+   * `tokenUsage` 的投影值是 `{ totals: { uncachedInputTokens, outputTokens,
+   * cacheReadTokens, cacheWriteTokens }, last: {...} | null }`：token 数**嵌套
+   * 在 `totals` 下**，不是平铺（`@deepseek-ai/dsh-token-meter` 的
+   * `tokenUsageStateSchema` 实测）。读平铺字段会永远拿到 0。
+   *
+   * @param payload - 投影帧。
+   */
+  function handleProjection(payload) {
+    var key = payload.key
+    if (typeof key !== 'string' || key === '') return
+    runtime.projections[key] = payload.value
+    if (payload.sessionId !== store.get('sessionId')) return
+    if (key === 'sessionStats') runtime.stats = payload.value
+    else if (key === 'tokenUsage') runtime.usage = payload.value
+    else if (key === 'todos') {
+      runtime.todos = Array.isArray(payload.value) ? payload.value : []
+      renderTodos()
+    } else if (key === 'title' && typeof payload.value === 'string') {
+      runtime.sessionTitle = payload.value
+    } else if (key === 'agentPreset' && typeof payload.value === 'string') {
+      runtime.preset = payload.value
+    }
+    renderStats()
+  }
+
+  /**
+   * 用宿主的投影快照整体刷新一次当前会话的统计与待办。
+   *
+   * 事件流只推**变更**，所以刚打开页面或刚切换卷宗时，必须先拉一次全量快照，
+   * 否则统计行会一直停在初始值。数据来源就是 `session.projections`。
+   *
+   * @param sessionId - 目标会话。
+   */
+  async function loadProjections(sessionId) {
+    var result = await api.sessions.projections({ sessionId: sessionId })
+    if (!result.ok) {
+      appendReceipt('trace', '投影快照读取失败：' + api.describeError(result.error), { title: 'session.projections' })
+      return
+    }
+    var value = result.value || {}
+    var values = value.values || {}
+    runtime.projections = values
+    runtime.projectionsAsOfSeq = Number(value.asOfSeq) || 0
+    if (values.sessionStats !== undefined) runtime.stats = values.sessionStats
+    if (values.tokenUsage !== undefined) runtime.usage = values.tokenUsage
+    if (Array.isArray(values.todos)) runtime.todos = values.todos
+    if (typeof values.title === 'string') runtime.sessionTitle = values.title
+    if (typeof values.agentPreset === 'string') runtime.preset = values.agentPreset
+    renderTodos()
+    renderStats()
+  }
+
   /** 处理一条会话事件。 */
   function handleSessionEvent(sessionId, event) {
     if (event === null || typeof event !== 'object') return
@@ -519,10 +707,9 @@
     var text = panels.messageText(data.message)
     var usage = data.usage
     if (usage !== null && typeof usage === 'object') {
-      runtime.usage.inputTokens = Number(usage.inputTokens) || runtime.usage.inputTokens
-      runtime.usage.outputTokens = Number(usage.outputTokens) || runtime.usage.outputTokens
-      runtime.usage.cacheReadTokens = Number(usage.cacheReadTokens) || 0
-      runtime.usage.cacheWriteTokens = Number(usage.cacheWriteTokens) || 0
+      // 事件上的 usage 是 TokenUsage（`inputTokens` = 未命中缓存的输入）。
+      // 与投影的 `{totals:{uncachedInputTokens,...}}` 归一成同一形状。
+      runtime.usage = panels.usageTotals(usage)
     }
     if (text) {
       appendReceipt('text', text, {
@@ -689,6 +876,31 @@
   /* 提交申办                                                           */
   /* ------------------------------------------------------------------ */
 
+  /**
+   * 选定本次要用的推理强度。
+   *
+   * 规则（全部来自模型自己的目录数据，不硬编码任何档位）：
+   *   1. 下拉里选中的值若仍在该模型的 `reasoning.efforts` 里 → 用它；
+   *   2. 否则回落到该模型自己的 `reasoning.defaultEffort`；
+   *   3. 再否则返回空字符串（调用方不带该字段）。
+   *
+   * 之所以要回落：用户先选 A 模型（有 low/medium/high）再切到 B 模型
+   * （只有 high）时，下拉里的旧值已经不在 B 的合法集合里，直接提交会被
+   * 宿主以 input-invalid 拒绝。
+   *
+   * @returns 合法的推理强度 id，或 ''。
+   */
+  function effectiveEffort() {
+    var provider = store.get('provider')
+    var model = store.get('model')
+    if (!provider || !model) return ''
+    var info = panels.effortsForModel(runtime.modelGroups, provider + '\u0001' + model)
+    var chosen = store.get('reasoningEffort') || ''
+    var known = info.efforts.some(function (effort) { return effort.value === chosen })
+    if (chosen !== '' && known) return chosen
+    return info.defaultEffort || ''
+  }
+
   async function submitPrompt() {
     var input = util.$('gov-prompt')
     var text = input.value.trim()
@@ -703,7 +915,7 @@
         ...(store.get('preset') ? { agentPreset: store.get('preset') } : {}),
       })
       if (!created.ok) {
-        appendReceipt('error', '受理失败：' + created.error.message, { title: 'session.create' })
+        appendReceipt('error', '受理失败：' + api.describeError(created.error), { title: 'session.create' })
         return
       }
       sessionId = created.value && created.value.sessionId
@@ -722,22 +934,26 @@
     if (store.get('permission') && store.get('permission') !== runtime.permissionDefault) {
       var applied = await api.settings.update('permission', { defaultPreset: store.get('permission') })
       if (!applied.ok) {
-        appendReceipt('trace', '权限档位写入失败：' + applied.error.message, { title: 'settings.update' })
+        appendReceipt('trace', '权限档位写入失败：' + api.describeError(applied.error), { title: 'settings.update' })
       } else {
         runtime.permissionDefault = store.get('permission')
       }
     }
 
-    // 模型选择（会话级）
+    // 模型选择（会话级）。宿主必填 `sessionId, provider, model`，
+    // `reasoningEffort` 可选；provider 必须来自 modelCatalog 的分组 id。
     if (store.get('provider') && store.get('model')) {
+      var effort = effectiveEffort()
       var selected = await api.sessions.selectModel({
         sessionId: sessionId,
         provider: store.get('provider'),
         model: store.get('model'),
-        ...(store.get('reasoningEffort') ? { reasoningEffort: store.get('reasoningEffort') } : {}),
+        ...(effort === '' ? {} : { reasoningEffort: effort }),
       })
       if (!selected.ok) {
-        appendReceipt('trace', '模型切换失败：' + selected.error.message, { title: 'session.selectModel' })
+        appendReceipt('trace', '模型切换失败：' + api.describeError(selected.error), { title: 'session.selectModel' })
+      } else {
+        store.set('reasoningEffort', effort)
       }
     }
 
@@ -748,7 +964,11 @@
     input.value = ''
     markRunning(true)
 
+    // `session.prompt` 的宿主必填字段是 requestId/sessionId/mode/content。
+    // `requestId` 每次唯一（由 api.sessions.prompt 兜底生成，这里显式给一次
+    // 便于在同一轮里关联回执）。
     var result = await api.sessions.prompt({
+      requestId: util.uuid(),
       sessionId: sessionId,
       mode: 'queue',
       content: [{ type: 'text', text: text }],
@@ -756,7 +976,7 @@
     })
     if (!result.ok) {
       markRunning(false)
-      appendReceipt('error', '提交失败：' + result.error.message, { title: 'session.prompt' })
+      appendReceipt('error', '提交失败：' + api.describeError(result.error), { title: 'session.prompt' })
       return
     }
     if (result.value && result.value.command && result.value.command.text) {
@@ -770,7 +990,7 @@
     if (!sessionId) return
     var result = await api.sessions.cancel({ sessionId: sessionId })
     if (!result.ok) {
-      appendReceipt('error', '取消失败：' + result.error.message, { title: 'session.cancel' })
+      appendReceipt('error', '取消失败：' + api.describeError(result.error), { title: 'session.cancel' })
       return
     }
     appendReceipt('trace', '已提交取消请求。', { title: 'session.cancel' })
@@ -816,7 +1036,7 @@
     if (!result.ok) {
       runtime.archive.items = []
       renderArchive()
-      util.$('gov-archive-hint').textContent = '卷宗列表读取失败：' + result.error.message
+      util.$('gov-archive-hint').textContent = '卷宗列表读取失败：' + api.describeError(result.error)
       return
     }
     var value = result.value || {}
@@ -834,7 +1054,9 @@
     }
     var result = await api.sessions.search({ query: query })
     if (!result.ok) {
-      util.$('gov-archive-hint').textContent = '检索失败：' + result.error.message
+      // 参数本身是对的（`{query}`）；失败原因是宿主侧的部署配置。
+      // 如实说明「宿主未启用会话检索」，而不是丢一个泛化错误。
+      util.$('gov-archive-hint').textContent = '检索不可用：' + api.describeError(result.error)
       return
     }
     var value = result.value || {}
@@ -881,7 +1103,14 @@
     var cursor = -1
     if (listed.ok && listed.value && Array.isArray(listed.value.items)) {
       var found = listed.value.items.filter(function (item) { return item.sessionId === sessionId })[0]
-      if (found !== undefined) cursor = 0
+      if (found !== undefined) {
+        // `session/page` 的 `throughSeq` 必须落在宿主自己的游标之内，超过会得到
+        // `gateway/bad-request: session page through seq N is past cursor M`。
+        // 游标就在列表项投影的 `asOfSeq` 上（宿主自己算的，不靠估算）。
+        cursor = found.projections && typeof found.projections.asOfSeq === 'number'
+          ? found.projections.asOfSeq
+          : 0
+      }
     }
     if (cursor === -1) {
       appendReceipt('trace', '该卷宗不在宿主的活动列表内，仅能通过「导出」查看完整流水。', { title: '卷宗' })
@@ -889,11 +1118,11 @@
     }
     var result = await api.sessions.page({
       address: { kind: 'session', sessionId: sessionId },
-      throughSeq: -1,
+      throughSeq: cursor,
       maxMessages: 40,
     })
     if (!result.ok) {
-      appendReceipt('error', '历史读取失败：' + result.error.message, { title: 'session.page' })
+      appendReceipt('error', '历史读取失败：' + api.describeError(result.error), { title: 'session.page' })
       return
     }
     var value = result.value || {}
@@ -937,7 +1166,7 @@
     var result = await api.settings.describe()
     if (!result.ok) {
       util.clear(root)
-      root.appendChild(el('div', { class: 'gov-hint is-error', text: '配置读取失败：' + result.error.message }))
+      root.appendChild(el('div', { class: 'gov-hint is-error', text: '配置读取失败：' + api.describeError(result.error) }))
       return
     }
     var value = result.value || {}
@@ -958,8 +1187,8 @@
   async function onSettingsChange(ns, patch, revision) {
     var result = await api.settings.update(ns, patch, revision)
     if (!result.ok) {
-      util.$('gov-settings-hint').textContent = '提交「' + ns + '」失败：' + result.error.message
-      global.alert('提交失败：' + result.error.message)
+      util.$('gov-settings-hint').textContent = '提交「' + ns + '」失败：' + api.describeError(result.error)
+      global.alert('提交失败：' + api.describeError(result.error))
       return
     }
     util.$('gov-settings-hint').textContent = '「' + ns + '」已提交并生效。'
@@ -1137,15 +1366,19 @@
 
   function bindForm() {
     util.$('gov-cwd').addEventListener('change', function () {
-      store.set('workspace', util.$('gov-cwd').value)
+      applyCwd(util.$('gov-cwd').value)
       void loadDirectory(util.$('gov-cwd').value)
     })
+    util.$('gov-cwd-input').addEventListener('change', function () {
+      applyCwd(util.$('gov-cwd-input').value.trim())
+    })
+    util.$('gov-cwd-browse').addEventListener('click', function () { void browseDirectory() })
     util.$('gov-cwd-up').addEventListener('click', function () {
       var current = store.get('workspace') || ''
       if (current === '') return
       var parent = current.replace(/[/\\][^/\\]*$/, '')
       if (parent === '' || parent === current) return
-      store.set('workspace', parent)
+      applyCwd(parent)
       void loadDirectory(parent)
     })
     util.$('gov-permission').addEventListener('change', function () {

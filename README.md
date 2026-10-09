@@ -1,11 +1,23 @@
 # dsh-gov-workbench
 
-> **本工程未在开发机上安装、未启动、未改动任何 dsh profile 文件。**
-> 开发机只产出工程代码；安装与运行都在独立测试机上进行。
-> 安装步骤见 **§3 在测试机上安装与验证**。
+> **状态：已完成真机挂载验证。**
 >
-> **验证边界**：仓库内 125 项测试全部基于 mock ctx，覆盖协议信封、SSE 帧、AbortSignal 回归、来源校验与令牌、Cordis Proxy 语义、前端接线。
-> **尚未经过真机网关联调** —— 真实 `typertGateway` 的端点解析、`session.create` / `session.prompt` 参数形状、`events.mux` 实际事件流、`sessionStats` 投影字段名，均需在测试机挂载后验证。详见 **§8 已知限制**。
+> **验证边界**：仓库内 138 项自动化测试基于 mock ctx，覆盖协议信封、SSE 帧、`AbortSignal` 回归、
+> 来源校验与令牌、Cordis Proxy 语义、`inject` 的 `!!js` 陷阱、前端接线。
+>
+> **真机验证结果**（dsh 0.2.0-rc.2 / node v24.18.1 / Windows，`desktop` profile）：
+>
+> | 项 | 实测结果 |
+> | --- | --- |
+> | 插件挂载 | 成功；3091 正常监听并返回页面 |
+> | 网关探测 | `/plugin/status` → `host: "typertGateway"`、`hostAvailable: true` |
+> | `session.list` | `result.ok = true`，返回 85 条真实会话 |
+> | `agentPreset.list` | `standard, ptc, minimal, cordis, computer-use, redteam` |
+> | `settings.describe` | 24 个宿主命名空间，系统配置页全部渲染且可写 |
+> | 页面渲染 | 政务门户完整渲染，六栏目可切换 |
+>
+> 尚未覆盖：`session.prompt` 的完整对话回合、审批/提问弹窗的 `respond` 回环、`events.mux` 的流式事件上屏、
+> `sessionStats` 统计口径逐项核对。详见 **§8 已知限制**。
 
 ## 1. 它是什么
 
@@ -288,7 +300,7 @@ dsh --profile <PROFILE> --dump-config-schema   # 只打印 profile 条目的 JSO
 
 ### 3.4 冒烟测试（在测试机上跑）
 
-工程自带 5 个零依赖测试套件，**不需要真实 API 额度**，也不会占用 3091：
+工程自带 6 个零依赖测试套件，**不需要真实 API 额度**，也不会占用 3091：
 
 ```bash
 cd <PLUGIN_DIR>
@@ -296,12 +308,34 @@ cd <PLUGIN_DIR>
 node test/syntax-check.mjs      # 语法 + UTF-8 无 BOM + 分层约束 + package.json 路径 + patch inject 守卫
 node test/patch-inject.mjs      # patch 不得用 !!js 写 inject（真 cordis 可用时做端到端验证）
 node test/cordis-proxy.mjs      # cordis ctx Proxy 语义（未 inject 的 service 访问会抛错）
+node test/host-descriptor.mjs   # 用宿主真实 descriptor 校验端点表与 buildArgs 投影
 node test/server-smoke.mjs      # 静态托管 / 四象限信封 / SSE / respond / 导出 / 跨源拒绝
 node test/plugin-boot.mjs       # 真 apply() → 真 http → 真 SSE → 惰性接网关 → 关停
-node test/frontend-wiring.mjs   # DOM id / 类名 / 栏目 / 模块顺序 / settings 签名
+node test/frontend-wiring.mjs   # DOM id / 类名 / 栏目 / 模块顺序 / settings 签名 / 宿主必填字段
 ```
 
-全部应以 `exit=0` 结束，并打印 `全部通过（N 项）`。合计 136 项。
+全部应以 `exit=0` 结束，并打印 `全部通过（N 项）`。
+
+> `test/host-descriptor.mjs` 会去读 dsh 发行版里的 `app.asar`，把 26 个宿主包的
+> `lib/typert.host.js` 里的 `invocations[]`（140 个端点）全部解出来，然后断言：
+> 别名表里每个 namespace 都真的注册过、前端调用的每个端点都存在、`buildArgs` 对
+> `acceptsUndefined` 的 wire 会整个省略、单 wire / 多 wire / scope 三种形状投影正确。
+> 找不到含 dsh 描述符的 `app.asar` 时（测试机没装桌面版）该组打印 `SKIP` 并以 **0**
+> 退出，第 1 组的静态检查永远执行。机器上若同时跑着别的 Electron 应用，定位器会
+> 逐个候选验证「真的含 dsh 描述符」再采纳，不会把别的 `app.asar` 误当 dsh。
+
+> 另有 4 个**真机联调**脚本（需要本机 3091 正在运行，且 `$DSH_HOME/gov-workbench.json`
+> 里有配对令牌）。它们**不是**回归套件的一部分，只在有真机时手动跑：
+>
+> ```bash
+> node test/_live-frontend.mjs    # 把改后的前端在 VM 里跑起来，捕获它真发的 wire body，原样打到真机
+> node test/_live-verify.mjs      # 提交一条真消息，验证 updatedAt 与 asOfSeq 都增长
+> node test/_live-regression.mjs  # 17 个已知可用端点回归，确认没改坏
+> node test/_live-degrade.mjs     # 工作目录降级路径与 session.search 的真实错误码
+> ```
+>
+> 这 4 个脚本会**真的往宿主里写数据**（建会话、发消息、改名），跑完会在 dsh 里留下
+> 若干测试会话 —— 这是真机验证的必要代价，不是副作用。
 
 > `test/patch-inject.mjs` 的第 2 组需要真 `@deepseek-ai/cordis` / `cordis-plugin-loader` /
 > `cordis-plugin-include` / `js-yaml`。解析不到时该组打印 `SKIP` 并以 **0** 退出（不算失败），
@@ -524,21 +558,35 @@ curl -i http://127.0.0.1:3091/plugin/status
 
 页面调用的 wire 端点（「单数域名.方法」写法）与宿主侧的对应关系。域名 → namespace 的映射由 `lib/host.js` 的别名表驱动。
 
+完整的 140 个宿主端点目录（含每个端点的 wire 名与 `acceptsUndefined` 标记）见
+[`docs/host-endpoints.md`](docs/host-endpoints.md)。
+
 | 栏目 / 功能 | 页面调用的 wire 端点 | 宿主 service / 说明 |
 | --- | --- | --- |
-| 工作目录枚举 | `directoryPicker.list`、`directoryPicker.createDirectory` | namespace `directoryPicker`（老形态对应 `apiProxy.host.listDirectory`）；返回 `path` / `home` / `crumbs` / `entries` / `truncated`。切换目录后重新枚举子目录。 |
+| 工作目录 | `directoryPicker.list`、`directoryPicker.pick`、`directoryPicker.createDirectory` | namespace `directoryPicker`；`list` 返回 `path` / `home` / `crumbs` / `entries` / `truncated`，**需要 browse capability**，缺失时宿主回 `directory-picker/unavailable`。`list` 的 `path` 声明了 `acceptsUndefined`，所以空值必须整个省略该 wire（`buildArgs` 已处理）。`pick` 无参数，弹原生对话框。**降级**：`list` 不可用时界面切成「可手动编辑的输入框 + 浏览…按钮」，并在提示里如实写明当前模式。 |
 | 权限档位（读取） | `permission.catalog` | namespace `permissionPresets`；返回 `options` / `defaultOptions` / `defaultPreset`。 |
 | 权限档位（写入） | `settings.update('permission', { defaultPreset })` | `settingsController`。0.2.0-rc.2 的 Remote 面只暴露 `permissionPresets.catalog`，写入走 `settings` 的 `permission.defaultPreset`（与官方 UI 同路）。**注意**：`settings/update` 的宿主签名是位置参数 `(ns, patch, expectedRevision)`，`public/js/api.js` 已把它组装成键名匹配的 payload 对象。 |
-| 办理模式 | `agentPreset.list`、`agentPreset.read`、`agentPreset.select` | namespace `agentPresets`；返回 `presets[]`（含 `id` / `name` / `isDefault`）。 |
-| 模型与推理强度 | `session.modelCatalog`、`session.selectModel` | `sessionController`。`modelCatalog` 返回 `default` / `routableProviders` / `groups` / `failures`；`selectModel` 带 `sessionId` + `provider` + `model` + 可选 `reasoningEffort`（推理强度选项随模型动态刷新）。另有 `llm.listProviders` / `llm.listConfigurableProviders`。 |
-| 提交申办 | `session.create` → `session.prompt` | `sessionController`。首次提交自动受理（`create`，可带 `cwd` / `agentPreset`），随后 `prompt`（`mode: 'queue'`、`content`、`clientTimeZone`）进入办理。事项编号由宿主分配（`session-*`）。 |
+| 办理模式 | `agentPreset.list`、`agentPreset.read`、`agentPreset.select` | namespace `agentPresets`；返回 `presets[]`（含 `id` / `name` / `isDefault`）。`read` 传裸 `{agentPreset}`；`select` 是**两个独立 wire** `{agentId, agentPreset}` —— `agentId` 是 scope 身份（即会话身份），传 `sessionId` 会得到 `gateway/arguments-invalid: missing "agentId"`。 |
+| 模型与推理强度 | `session.modelCatalog`、`session.selectModel` | `sessionController`。`modelCatalog` 返回 `default` / `routableProviders` / `groups` / `failures`；`selectModel` 的必填字段是 `sessionId` + **`provider`** + `model`，`reasoningEffort` 可选。provider 必须取自 `groups[].id`（不是模型名的一部分）。推理强度会回落到该模型自己的 `reasoning.defaultEffort`。另有 `llm.listProviders` / `llm.listConfigurableProviders`。 |
+| 提交申办 | `session.create` → `session.prompt` | `sessionController`。首次提交自动受理（`create`，可带 `cwd` / `agentPreset`），随后 `prompt`。**`session/prompt` 的必填字段是 `requestId` + `sessionId` + `mode` + `content`**（`requestId` 每次提交唯一；漏传会得到 `gateway/input-invalid: wire field "request" failed boundary validation`）。事项编号由宿主分配（`session-*`）。 |
 | 取消办理 | `session.cancel` | `sessionController`，带 `sessionId`。 |
-| 历史分页 | `session.page`、`session.list` | `sessionController`。`page` 入参 `address: { kind:'session', sessionId }` / `throughSeq` / `maxMessages`，返回 `records` / `hasMore`；`list` 用于取当前事项游标与投影。 |
-| 卷宗检索 | `session.search` | `sessionController`，带 `query`。留空显示全部。 |
+| 历史分页 | `session.page`、`session.list` | `sessionController`。`page` 入参 `address: { kind:'session', sessionId }` / `throughSeq` / `maxMessages`，返回 `records` / `hasMore`。**`throughSeq` 必须落在宿主自己的游标内**（超过会得到 `gateway/bad-request: session page through seq N is past cursor M`）；界面取自 `session.list` 的 `projections.asOfSeq`。 |
+| 卷宗检索 | `session.search` | `sessionController`，带 `query`。留空显示全部。宿主若把 session-query 索引配成 `openAt "never"`（本机如此），会回 `gateway/internal: session search is disabled` —— 界面显示成「宿主未启用会话检索」。 |
+| 技能目录 | `skills.list` | namespace 是**复数** `skills`（不是 `skill`），必带 `sessionId`。 |
 | 配置读写 | `settings.describe`、`settings.update`、`settings.replace`、`settings.mutate` | `settingsController`。表单由 `describe` 返回的 schema 动态生成，覆盖全部命名空间；`update` 带修订号做乐观并发控制；敏感项只显示是否已设置。 |
-| 统计取值 | `session.projections` + `events.mux` 的 `session/projection` 帧 | `sessionProjections.onChanged`。轮次 / 步数 / 模型耗时 / 工具耗时 / 首 token / 解码耗时与 token 来自 `sessionStats` 投影；输入 / 输出 / 缓存 token 来自 `tokenUsage` 投影。平台不估算、不编造任何统计值。 |
+| 统计取值 | `session.projections` + `events.mux` 的 `session/projection` 帧 | `sessionProjections.onChanged`。轮次 / 步数 / 模型耗时 / 工具耗时 / 首 token / 解码耗时与 token 来自 `sessionStats` 投影；输入 / 输出 / 缓存 token 来自 `tokenUsage` 投影 —— **嵌套在 `totals` 下**（`{totals:{uncachedInputTokens,outputTokens,cacheReadTokens,cacheWriteTokens}}`），读平铺字段会永远拿到 0。平台不估算、不编造任何统计值。 |
+| 宿主诊断 | `pluginInventory.list` | namespace `pluginInventory`；返回宿主已加载的插件条目与各预设的组合，用于诊断「插件到底挂上没有」。 |
 | 审批应答 | `POST /api/respond` | 网关 `$events` 的 waterfall 帧（`approval/request`）经 `MuxController` 翻译为 `approval/requested`，应答走 `$events/result` + `{ clientId, eventId, outcome }`。 |
 | 提问应答 | `POST /api/respond` | 同上路径，`user-questions/request` → `question/requested`，应答携带 `{ answers }`。 |
+
+**已移除的幽灵端点**（0.2.0-rc.2 上不存在，调了必然失败，因此从 `api.js` 与别名表里删掉）：
+
+| 曾经的调用 | 真实情况 |
+| --- | --- |
+| `host.describe` / `host.listDirectory` | 0.1.x `apiProxy` 时代的端点。别名表曾把域名 `host` 改写成 `directoryPicker`，产生 `directoryPicker/describe`、`directoryPicker/listDirectory` 两个必然 `gateway/invocation-unavailable` 的端点 —— 该映射已删除。 |
+| `skill.list` | 真实端点是 `skills/list`（复数 namespace），且必带 `sessionId`。 |
+| `subagent.list` | `subagents` namespace 只有 `prompt` 与 `interruptByParent`。 |
+| `workspace.list` | 不存在；会话/工作区列表走 `session.list` 的投影。 |
 | 卷宗导出 | `GET /api/session.export?sessionId=` | `ctx.sessionPersistence.open(id, 'read')` → `handle.read()`，序列化为 JSONL（首行会话头，其后每行一个事件），与 `dsh-session-log-export` 的 `readSessionLogText` 同格式。网关兜底走 `downloads/sessionLog`。 |
 | 事件流 | `GET /api/events.mux` | 合成流：进程内 `session/event` / `session/created` / `session/disposed` + `sessionProjections.onChanged` + 网关 `$events` 翻译出的审批 / 提问帧。 |
 | 宿主原始事件流 | `GET /api/events.host` | 网关 `$events` 帧原样透传（`ready` / `emit` / `waterfall` / `cancel`）。 |
